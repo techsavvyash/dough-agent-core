@@ -1,0 +1,314 @@
+import { DoughEventType } from "@dough/protocol";
+import type { DoughEvent, UsageMetadata } from "@dough/protocol";
+import type { ThreadMessage } from "@dough/threads";
+import type { LLMProvider, SendOptions } from "./provider.ts";
+import {
+  query,
+  listSessions,
+  forkSession,
+  type SDKMessage,
+  type Options,
+} from "@anthropic-ai/claude-agent-sdk";
+
+export interface ClaudeProviderConfig {
+  model?: string;
+  cwd?: string;
+  permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan";
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  systemPrompt?: string;
+  maxTurns?: number;
+  maxBudgetUsd?: number;
+  includePartialMessages?: boolean;
+  effort?: "low" | "medium" | "high" | "max";
+}
+
+/**
+ * Claude provider using @anthropic-ai/claude-agent-sdk V1 stable API.
+ *
+ * Uses query() with persistSession for JSONL session persistence,
+ * includePartialMessages for token-level streaming, and
+ * resume for session continuation.
+ */
+export class ClaudeProvider implements LLMProvider {
+  readonly name = "claude";
+  readonly maxContextTokens = 200_000;
+
+  private config: ClaudeProviderConfig;
+  private activeSessionId: string | null = null;
+
+  constructor(config: ClaudeProviderConfig = {}) {
+    this.config = {
+      model: config.model ?? "sonnet",
+      permissionMode: config.permissionMode ?? "bypassPermissions",
+      includePartialMessages: config.includePartialMessages ?? true,
+      effort: config.effort ?? "medium",
+      ...config,
+    };
+  }
+
+  get sessionId(): string | null {
+    return this.activeSessionId;
+  }
+
+  async *send(
+    messages: ThreadMessage[],
+    options: SendOptions
+  ): AsyncGenerator<DoughEvent> {
+    // Build the prompt from the last user message
+    const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUserMessage) {
+      yield {
+        type: DoughEventType.Error,
+        message: "No user message found in thread",
+      };
+      return;
+    }
+
+    const queryOptions: Options = {
+      model: options.model ?? this.config.model,
+      cwd: this.config.cwd ?? process.cwd(),
+      persistSession: true,
+      includePartialMessages: this.config.includePartialMessages,
+      permissionMode: this.config.permissionMode,
+      allowedTools: this.config.allowedTools,
+      disallowedTools: this.config.disallowedTools,
+      maxTurns: this.config.maxTurns,
+      maxBudgetUsd: this.config.maxBudgetUsd,
+      effort: this.config.effort,
+      abortController: options.signal
+        ? abortControllerFromSignal(options.signal)
+        : undefined,
+    };
+
+    // Add system prompt if provided
+    if (options.systemPrompt ?? this.config.systemPrompt) {
+      queryOptions.systemPrompt = options.systemPrompt ?? this.config.systemPrompt;
+    }
+
+    // Resume existing session or start new
+    if (this.activeSessionId) {
+      queryOptions.resume = this.activeSessionId;
+    }
+
+    const streamId = crypto.randomUUID();
+    let fullText = "";
+    let capturedSessionId: string | null = null;
+    let gotStreamDeltas = false;
+    let lastUsage: UsageMetadata = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+
+    try {
+      const q = query({
+        prompt: lastUserMessage.content,
+        options: queryOptions,
+      });
+
+      for await (const message of q) {
+        // Track session ID from any message
+        if ("session_id" in message && message.session_id) {
+          capturedSessionId = message.session_id;
+        }
+
+        // When we have partial streaming, skip the duplicate full assistant message text
+        const isStreaming = this.config.includePartialMessages;
+        const events = mapSDKMessageToDoughEvents(
+          message,
+          streamId,
+          isStreaming && gotStreamDeltas
+        );
+
+        for (const event of events) {
+          if (event.type === DoughEventType.ContentDelta) {
+            fullText += event.text;
+            if (message.type === "stream_event") {
+              gotStreamDeltas = true;
+            }
+          }
+
+          // Capture usage from Finished events for ContentComplete
+          if (event.type === DoughEventType.Finished && event.usage) {
+            lastUsage = event.usage;
+          }
+
+          // Emit ContentComplete before Finished
+          if (event.type === DoughEventType.Finished && fullText) {
+            yield {
+              type: DoughEventType.ContentComplete,
+              text: fullText,
+              usage: lastUsage,
+              streamId,
+            };
+          }
+
+          yield event;
+        }
+      }
+
+      // Update tracked session ID
+      if (capturedSessionId) {
+        this.activeSessionId = capturedSessionId;
+      }
+    } catch (error) {
+      yield {
+        type: DoughEventType.Error,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  async estimateTokens(messages: ThreadMessage[]): Promise<number> {
+    // Rough estimate: ~4 chars per token for English text
+    return messages.reduce(
+      (sum, msg) => sum + Math.ceil(msg.content.length / 4),
+      0
+    );
+  }
+
+  async createSession(options?: {
+    sessionId?: string;
+    model?: string;
+  }): Promise<string> {
+    if (options?.sessionId) {
+      this.activeSessionId = options.sessionId;
+      return options.sessionId;
+    }
+    // Session ID will be assigned by claude-agent-sdk on first query
+    return this.activeSessionId ?? "pending";
+  }
+
+  async listSessions(dir?: string) {
+    return listSessions({ dir });
+  }
+
+  async forkSession(sessionId: string, options?: { upToMessageId?: string; title?: string }) {
+    return forkSession(sessionId, options);
+  }
+
+  async dispose(): Promise<void> {
+    this.activeSessionId = null;
+  }
+}
+
+/**
+ * Maps claude-agent-sdk SDKMessage to DoughEvent(s).
+ * A single SDK message may produce zero or more DoughEvents.
+ */
+function mapSDKMessageToDoughEvents(
+  message: SDKMessage,
+  streamId: string,
+  skipAssistantText: boolean = false
+): DoughEvent[] {
+  const events: DoughEvent[] = [];
+
+  switch (message.type) {
+    case "assistant": {
+      // When streaming is enabled and we already got deltas, skip duplicate text
+      if (!skipAssistantText) {
+        const textBlocks = message.message.content.filter(
+          (block): block is { type: "text"; text: string } =>
+            block.type === "text"
+        );
+        const text = textBlocks.map((b) => b.text).join("");
+        if (text) {
+          events.push({
+            type: DoughEventType.ContentDelta,
+            text,
+            streamId,
+          });
+        }
+      }
+
+      // Always extract tool use blocks (not duplicated by stream events)
+      const toolUseBlocks = message.message.content.filter(
+        (block): block is { type: "tool_use"; id: string; name: string; input: Record<string, unknown> } =>
+          block.type === "tool_use"
+      );
+      for (const tool of toolUseBlocks) {
+        events.push({
+          type: DoughEventType.ToolCallRequest,
+          callId: tool.id,
+          name: tool.name,
+          args: tool.input as Record<string, unknown>,
+          streamId,
+        });
+      }
+      break;
+    }
+
+    case "stream_event": {
+      // Partial streaming event — token-level deltas
+      const event = message.event;
+      if (event.type === "content_block_delta") {
+        const delta = event.delta;
+        if ("text" in delta && delta.text) {
+          events.push({
+            type: DoughEventType.ContentDelta,
+            text: delta.text,
+            streamId,
+          });
+        }
+        if (delta.type === "thinking_delta" && "thinking" in delta) {
+          events.push({
+            type: DoughEventType.Thought,
+            text: (delta as { thinking: string }).thinking,
+            streamId,
+          });
+        }
+      }
+      break;
+    }
+
+    case "result": {
+      const usage: UsageMetadata = {
+        inputTokens: message.usage?.input_tokens ?? 0,
+        outputTokens: message.usage?.output_tokens ?? 0,
+        totalTokens:
+          (message.usage?.input_tokens ?? 0) +
+          (message.usage?.output_tokens ?? 0),
+        costUsd: message.total_cost_usd,
+      };
+
+      if (message.is_error) {
+        events.push({
+          type: DoughEventType.Error,
+          message: "errors" in message ? message.errors.join("; ") : "Unknown error",
+          code: message.subtype,
+        });
+      }
+
+      events.push({
+        type: DoughEventType.Finished,
+        reason: message.is_error ? "completed" : "completed",
+        usage,
+      });
+      break;
+    }
+
+    case "system": {
+      // System init message — we use this to capture session_id
+      // No DoughEvent needed, handled in the main loop
+      break;
+    }
+
+    // Ignore other message types for now
+    default:
+      break;
+  }
+
+  return events;
+}
+
+/**
+ * Create an AbortController that aborts when the given signal aborts.
+ */
+function abortControllerFromSignal(signal: AbortSignal): AbortController {
+  const controller = new AbortController();
+  if (signal.aborted) {
+    controller.abort(signal.reason);
+  } else {
+    signal.addEventListener("abort", () => controller.abort(signal.reason), {
+      once: true,
+    });
+  }
+  return controller;
+}

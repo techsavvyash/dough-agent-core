@@ -1,0 +1,13 @@
+{
+  "name": "@dough/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@dough/protocol": "workspace:*",
+    "@dough/threads": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "@openai/codex-sdk": "latest"
+  }
+}

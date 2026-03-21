@@ -1,0 +1,123 @@
+import { DoughEventType } from "@dough/protocol";
+import type { DoughEvent } from "@dough/protocol";
+import type { ThreadManager, ThreadMessage } from "@dough/threads";
+import type { LLMProvider, SendOptions } from "./providers/provider.ts";
+
+export interface DoughSessionConfig {
+  provider: LLMProvider;
+  threadManager: ThreadManager;
+  systemPrompt?: string;
+  model?: string;
+}
+
+/**
+ * A single conversation session. Manages the agentic loop:
+ * send → stream response → handle tool calls → continue.
+ * Uses ThreadManager for context window cap enforcement.
+ */
+export class DoughSession {
+  readonly id: string;
+  private activeThreadId: string | null = null;
+  private provider: LLMProvider;
+  private threadManager: ThreadManager;
+  private systemPrompt?: string;
+  private model?: string;
+  private abortController: AbortController | null = null;
+
+  constructor(id: string, config: DoughSessionConfig) {
+    this.id = id;
+    this.provider = config.provider;
+    this.threadManager = config.threadManager;
+    this.systemPrompt = config.systemPrompt;
+    this.model = config.model;
+  }
+
+  get currentThreadId(): string | null {
+    return this.activeThreadId;
+  }
+
+  async initialize(): Promise<string> {
+    const thread = await this.threadManager.createThread(this.id);
+    this.activeThreadId = thread.id;
+    return thread.id;
+  }
+
+  async *send(prompt: string): AsyncGenerator<DoughEvent> {
+    if (!this.activeThreadId) {
+      await this.initialize();
+    }
+
+    this.abortController = new AbortController();
+    const threadId = this.activeThreadId!;
+    const thread = await this.threadManager.getThread(threadId);
+    if (!thread) throw new Error(`Active thread ${threadId} not found`);
+
+    // Add user message
+    const userMessage: ThreadMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: prompt,
+      tokenEstimate: Math.ceil(prompt.length / 4),
+      timestamp: new Date().toISOString(),
+    };
+    await this.threadManager.addMessage(threadId, userMessage);
+
+    // Check if handoff is needed before sending
+    if (this.threadManager.needsHandoff(thread)) {
+      const result = await this.threadManager.handoff(threadId);
+      this.activeThreadId = result.toThread.id;
+
+      yield {
+        type: DoughEventType.ThreadHandoff,
+        fromThreadId: result.fromThread.id,
+        toThreadId: result.toThread.id,
+        summary: result.summary,
+      };
+    }
+
+    // Get current thread messages and send to provider
+    const currentThread = await this.threadManager.getThread(
+      this.activeThreadId!
+    );
+    if (!currentThread) throw new Error("Thread lost after handoff");
+
+    const options: SendOptions = {
+      model: this.model,
+      systemPrompt: this.systemPrompt,
+      signal: this.abortController.signal,
+    };
+
+    let fullResponse = "";
+    for await (const event of this.provider.send(
+      currentThread.messages,
+      options
+    )) {
+      if (this.abortController.signal.aborted) {
+        yield { type: DoughEventType.Aborted };
+        return;
+      }
+
+      if (event.type === DoughEventType.ContentDelta) {
+        fullResponse += event.text;
+      }
+
+      yield event;
+    }
+
+    // Store assistant response
+    if (fullResponse) {
+      const assistantMessage: ThreadMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: fullResponse,
+        tokenEstimate: Math.ceil(fullResponse.length / 4),
+        timestamp: new Date().toISOString(),
+      };
+      await this.threadManager.addMessage(this.activeThreadId!, assistantMessage);
+    }
+  }
+
+  abort(): void {
+    this.abortController?.abort();
+  }
+}
