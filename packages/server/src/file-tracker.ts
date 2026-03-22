@@ -159,7 +159,10 @@ export class FileTracker {
    * Skips files larger than 5 MB (before+after combined) to avoid bloating the DB.
    */
   private persistFileDiff(filePath: string): void {
-    if (!this.sessionId || !this.persistence) return;
+    if (!this.sessionId || !this.persistence) {
+      console.warn(`[file-tracker] persistFileDiff skipped — sessionId=${this.sessionId} persistence=${!!this.persistence}`);
+      return;
+    }
     const stat = this.statsCache.get(filePath);
     if (!stat) return; // file reverted to original — nothing to persist
 
@@ -183,6 +186,7 @@ export class FileTracker {
       linesRemoved: stat.linesRemoved,
       language: extToLanguage(filePath),
     };
+    console.log(`[file-tracker] persisting diff for ${filePath} (session=${this.sessionId}, status=${diff.status}, +${diff.linesAdded}/-${diff.linesRemoved})`);
     this.persistence.save(this.sessionId, filePath, before, after, diff);
   }
 
@@ -198,6 +202,7 @@ export class FileTracker {
   hydrate(sessionId: string): void {
     if (!this.persistence) return;
     const records = this.persistence.load(sessionId);
+    console.log(`[file-tracker] hydrate(${sessionId}) — loaded ${records.length} diff record(s)`);
     for (const rec of records) {
       // First-snapshot-wins: don't overwrite if this path was already snapshotted
       if (!this.snapshots.has(rec.filePath)) {

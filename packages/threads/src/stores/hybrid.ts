@@ -301,6 +301,7 @@ export class HybridThreadStore implements ThreadStore {
 
   /** Upsert a single file diff row for a session. Idempotent: last write wins. */
   saveFileDiff(record: FileDiffRecord): void {
+    console.log(`[hybrid-store] saveFileDiff(session=${record.sessionId}, path=${record.filePath}, status=${record.status})`);
     this.db.run(
       `INSERT OR REPLACE INTO file_diffs
          (session_id, file_path, status, before_text, after_text,
@@ -323,6 +324,7 @@ export class HybridThreadStore implements ThreadStore {
 
   /** Load all file diff records for a session, oldest change first. Returns [] if none. */
   loadFileDiffs(sessionId: string): FileDiffRecord[] {
+    console.log(`[hybrid-store] loadFileDiffs(session=${sessionId})`);
     const rows = this.db
       .query(
         "SELECT * FROM file_diffs WHERE session_id = ? ORDER BY updated_at ASC"

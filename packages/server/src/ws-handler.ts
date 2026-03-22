@@ -264,7 +264,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
       ws.data.fileTracker = new FileTracker({ persistence });
       ws.data.sendQueue = [];
       ws.data.isProcessingQueue = false;
-      console.log("[ws] client connected");
+      console.log(`[ws] client connected (diffStore=${!!diffStore}, persistence=${!!persistence})`);
     },
 
     async message(ws: ServerWebSocket<WSData>, raw: string | Buffer) {
@@ -379,6 +379,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
             // Push ChangeStatsUpdate immediately so the TUI badge lights up without
             // requiring the user to run another prompt first
             const hydratedStats = ws.data.fileTracker.getStats();
+            console.log(`[ws] resume hydrated stats: filesChanged=${hydratedStats.filesChanged} +${hydratedStats.totalAdded}/-${hydratedStats.totalRemoved}`);
             if (hydratedStats.filesChanged > 0) {
               const statsMsg: ServerMessage = {
                 kind: "event",
