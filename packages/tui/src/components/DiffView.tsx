@@ -29,6 +29,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
   const { width } = useTerminalDimensions();
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
+  const [sidebarVisible, setSidebarVisible] = useState(true);
   const { diffs, stats } = payload;
 
   // Singletons — stable across re-renders
@@ -39,11 +40,13 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
     if (key.name === "escape" || (key.ctrl && key.name === "d")) {
       onClose();
     } else if (key.name === "up" || key.name === "k") {
-      setSelectedFileIndex((i) => (i > 0 ? i - 1 : diffs.length - 1));
+      setSelectedFileIndex((i: number) => (i > 0 ? i - 1 : diffs.length - 1));
     } else if (key.name === "down" || key.name === "j") {
-      setSelectedFileIndex((i) => (i < diffs.length - 1 ? i + 1 : 0));
+      setSelectedFileIndex((i: number) => (i < diffs.length - 1 ? i + 1 : 0));
     } else if (key.name === "s") {
-      setViewMode((m) => (m === "split" ? "unified" : "split"));
+      setViewMode((m: ViewMode) => (m === "split" ? "unified" : "split"));
+    } else if (key.name === "b") {
+      setSidebarVisible((v: boolean) => !v);
     }
   });
 
@@ -78,35 +81,37 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
         <text fg={colors.accent}>{`${stats.filesChanged} ${stats.filesChanged === 1 ? "file" : "files"}  `}</text>
         <text fg={colors.success}>{`+${stats.totalAdded}  `}</text>
         <text fg={colors.error}>{`-${stats.totalRemoved}  `}</text>
-        <text fg={colors.textMuted}>{`   ↑↓ navigate · s ${isSplit ? "→ unified" : "→ split"} · Esc close`}</text>
+        <text fg={colors.textMuted}>{`   ↑↓ navigate · s ${isSplit ? "→ unified" : "→ split"} · b ${sidebarVisible ? "hide" : "show"} files · Esc close`}</text>
       </box>
       <box height={1}><text fg={colors.border}>{rule}</text></box>
 
       {/* ── Body ── */}
       <box flex={1} flexDirection="row">
 
-        {/* File list panel */}
-        <box width={FILE_LIST_W} flexDirection="column" borderRight>
-          <scrollbox flex={1}>
-            {diffs.map((diff, i) => {
-              const isSel = i === selectedFileIndex;
-              return (
-                <box key={diff.filePath} height={1} paddingX={1} flexDirection="row">
-                  <text fg={isSel ? colors.accent : colors.textMuted}>{isSel ? "▶ " : "  "}</text>
-                  <text fg={getStatusColor(diff.status)}>{getStatusIcon(diff.status) + " "}</text>
-                  <text fg={isSel ? colors.text : colors.textDim}>
-                    {shortenPath(diff.filePath, FILE_LIST_W - 7)}
-                  </text>
-                </box>
-              );
-            })}
-          </scrollbox>
-          {/* Stats for selected file */}
-          <box height={1} paddingX={1} flexDirection="row">
-            <text fg={colors.success}>{`+${sel.linesAdded} `}</text>
-            <text fg={colors.error}>{`-${sel.linesRemoved}`}</text>
+        {/* File list panel — collapsible with `b` */}
+        {sidebarVisible && (
+          <box width={FILE_LIST_W} flexDirection="column" borderRight>
+            <scrollbox flex={1}>
+              {diffs.map((diff, i) => {
+                const isSel = i === selectedFileIndex;
+                return (
+                  <box key={diff.filePath} height={1} paddingX={1} flexDirection="row">
+                    <text fg={isSel ? colors.accent : colors.textMuted}>{isSel ? "▶ " : "  "}</text>
+                    <text fg={getStatusColor(diff.status)}>{getStatusIcon(diff.status) + " "}</text>
+                    <text fg={isSel ? colors.text : colors.textDim}>
+                      {shortenPath(diff.filePath, FILE_LIST_W - 7)}
+                    </text>
+                  </box>
+                );
+              })}
+            </scrollbox>
+            {/* Stats for selected file */}
+            <box height={1} paddingX={1} flexDirection="row">
+              <text fg={colors.success}>{`+${sel.linesAdded} `}</text>
+              <text fg={colors.error}>{`-${sel.linesRemoved}`}</text>
+            </box>
           </box>
-        </box>
+        )}
 
         {/* Diff panel — native <diff> with tree-sitter syntax highlighting */}
         <box flex={1} flexDirection="column">
@@ -126,6 +131,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
             syntaxStyle={syntaxStyle}
             treeSitterClient={treeSitterClient}
             showLineNumbers={true}
+            wrapMode="word"
             fg={colors.text}
             addedBg="#162816"
             removedBg="#281618"
