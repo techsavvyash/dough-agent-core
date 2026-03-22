@@ -61,7 +61,13 @@ export function CommandPalette({
       key.sequence &&
       key.sequence.length === 1 &&
       !key.ctrl &&
-      !key.meta
+      !key.meta &&
+      // Only accept printable ASCII (space through ~); excludes ESC (\x1b),
+      // DEL, and other control characters that the terminal parser may emit as
+      // intermediate events before resolving the final key name (e.g. on Linux
+      // the parser emits \x1b with no key.name before emitting key.name=escape).
+      key.sequence.charCodeAt(0) >= 32 &&
+      key.sequence.charCodeAt(0) <= 126
     ) {
       // Accumulate printable characters into the search query
       setQuery((q: string) => q + key.sequence);
