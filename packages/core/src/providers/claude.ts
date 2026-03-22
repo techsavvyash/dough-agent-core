@@ -110,63 +110,88 @@ export class ClaudeProvider implements LLMProvider {
     let gotStreamDeltas = false;
     let lastUsage: UsageMetadata = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
-    try {
-      const q = query({
-        prompt: lastUserMessage.content,
-        options: queryOptions,
-      });
+    // Attempt the query — may need to retry without `resume` if the
+    // provider-native session JSONL was deleted (server restart, cleanup, etc.)
+    let retried = false;
 
-      for await (const message of q) {
-        // Track session ID from any message
-        if ("session_id" in message && message.session_id) {
-          capturedSessionId = message.session_id;
-        }
+    const runQuery = async function* (
+      self: ClaudeProvider,
+      opts: Options
+    ): AsyncGenerator<DoughEvent> {
+      try {
+        const q = query({
+          prompt: lastUserMessage.content,
+          options: opts,
+        });
 
-        // When we have partial streaming, skip the duplicate full assistant message text
-        const isStreaming = this.config.includePartialMessages;
-        const events = mapSDKMessageToDoughEvents(
-          message,
-          streamId,
-          isStreaming && gotStreamDeltas
-        );
+        for await (const message of q) {
+          // Track session ID from any message
+          if ("session_id" in message && message.session_id) {
+            capturedSessionId = message.session_id;
+          }
 
-        for (const event of events) {
-          if (event.type === DoughEventType.ContentDelta) {
-            fullText += event.text;
-            if (message.type === "stream_event") {
-              gotStreamDeltas = true;
+          // When we have partial streaming, skip the duplicate full assistant message text
+          const isStreaming = self.config.includePartialMessages;
+          const events = mapSDKMessageToDoughEvents(
+            message,
+            streamId,
+            isStreaming && gotStreamDeltas
+          );
+
+          for (const event of events) {
+            if (event.type === DoughEventType.ContentDelta) {
+              fullText += event.text;
+              if (message.type === "stream_event") {
+                gotStreamDeltas = true;
+              }
             }
-          }
 
-          // Capture usage from Finished events for ContentComplete
-          if (event.type === DoughEventType.Finished && event.usage) {
-            lastUsage = event.usage;
-          }
+            // Capture usage from Finished events for ContentComplete
+            if (event.type === DoughEventType.Finished && event.usage) {
+              lastUsage = event.usage;
+            }
 
-          // Emit ContentComplete before Finished
-          if (event.type === DoughEventType.Finished && fullText) {
-            yield {
-              type: DoughEventType.ContentComplete,
-              text: fullText,
-              usage: lastUsage,
-              streamId,
-            };
-          }
+            // Emit ContentComplete before Finished
+            if (event.type === DoughEventType.Finished && fullText) {
+              yield {
+                type: DoughEventType.ContentComplete,
+                text: fullText,
+                usage: lastUsage,
+                streamId,
+              };
+            }
 
-          yield event;
+            yield event;
+          }
         }
-      }
 
-      // Update tracked session ID
-      if (capturedSessionId) {
-        this.activeSessionId = capturedSessionId;
+        // Update tracked session ID
+        if (capturedSessionId) {
+          self.activeSessionId = capturedSessionId;
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+
+        // The SDK session JSONL may have been deleted (server restart, cleanup).
+        // Retry once without `resume` so we start a fresh SDK session while
+        // keeping Dough-level thread history intact.
+        if (!retried && msg.includes("No conversation found")) {
+          retried = true;
+          self.activeSessionId = null;
+          const freshOpts = { ...opts };
+          delete freshOpts.resume;
+          yield* runQuery(self, freshOpts);
+          return;
+        }
+
+        yield {
+          type: DoughEventType.Error,
+          message: msg,
+        };
       }
-    } catch (error) {
-      yield {
-        type: DoughEventType.Error,
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
+    };
+
+    yield* runQuery(this, queryOptions);
   }
 
   async estimateTokens(messages: ThreadMessage[]): Promise<number> {

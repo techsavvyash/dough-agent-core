@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { DiffPayload, FileDiff } from "@dough/protocol";
 import { colors, symbols, hrule } from "../theme.ts";
@@ -121,27 +121,116 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
   );
 }
 
-/** Render the unified diff with colored +/- lines */
+// ── Diff parser ──────────────────────────────────────────────────────────────
+
+type DiffLineType = "added" | "removed" | "context" | "hunk";
+
+interface ParsedDiffLine {
+  type: DiffLineType;
+  content: string;
+  /** Line number in the original file (undefined for added lines) */
+  oldNum?: number;
+  /** Line number in the new file (undefined for removed lines) */
+  newNum?: number;
+}
+
+/**
+ * Parse a unified diff string into structured lines with line numbers.
+ * Skips file-level metadata headers (diff/index/---/+++) since the
+ * filename is already shown in the panel header above.
+ */
+function parseDiff(unifiedDiff: string): ParsedDiffLine[] {
+  const result: ParsedDiffLine[] = [];
+  let oldLine = 0;
+  let newLine = 0;
+
+  for (const raw of unifiedDiff.split("\n")) {
+    // Skip file-level header noise — shown in the panel header already
+    if (
+      raw.startsWith("diff ") ||
+      raw.startsWith("index ") ||
+      raw.startsWith("--- ") ||
+      raw.startsWith("+++ ")
+    ) continue;
+
+    if (raw.startsWith("@@")) {
+      // @@ -oldStart[,count] +newStart[,count] @@ [optional context]
+      const m = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (m) {
+        oldLine = parseInt(m[1], 10);
+        newLine = parseInt(m[2], 10);
+      }
+      result.push({ type: "hunk", content: raw });
+      continue;
+    }
+
+    if (raw.startsWith("+")) {
+      result.push({ type: "added", content: raw.slice(1), newNum: newLine++ });
+    } else if (raw.startsWith("-")) {
+      result.push({ type: "removed", content: raw.slice(1), oldNum: oldLine++ });
+    } else if (raw.startsWith(" ")) {
+      result.push({ type: "context", content: raw.slice(1), oldNum: oldLine++, newNum: newLine++ });
+    }
+    // trailing empty lines / no-newline markers → skip
+  }
+
+  return result;
+}
+
+// ── DiffContent renderer ─────────────────────────────────────────────────────
+
+/** GitHub PR-style diff renderer with line numbers and a +/- gutter. */
 function DiffContent({ diff }: { diff: FileDiff }) {
-  const lines = diff.unifiedDiff.split("\n");
+  const lines = parseDiff(diff.unifiedDiff);
 
   return (
-    <box flexDirection="column" paddingX={1}>
+    <box flexDirection="column">
       {lines.map((line, i) => {
-        let fg = colors.textDim;
-        if (line.startsWith("+") && !line.startsWith("+++")) {
-          fg = colors.success;
-        } else if (line.startsWith("-") && !line.startsWith("---")) {
-          fg = colors.error;
-        } else if (line.startsWith("@@")) {
-          fg = colors.secondary;
-        } else if (line.startsWith("diff") || line.startsWith("index")) {
-          fg = colors.textMuted;
+        if (line.type === "hunk") {
+          // Hunk header — show as a styled separator with the @@ context
+          return (
+            <box key={`h${i}`} height={1} flexDirection="row" paddingX={1}>
+              <text fg={colors.secondary}>{line.content}</text>
+            </box>
+          );
+        }
+
+        const oldNum =
+          line.oldNum !== undefined ? String(line.oldNum).padStart(4) : "    ";
+        const newNum =
+          line.newNum !== undefined ? String(line.newNum).padStart(4) : "    ";
+
+        let prefix: string;
+        let lineFg: string;
+        let gutterFg: string;
+
+        switch (line.type) {
+          case "added":
+            prefix = "+";
+            lineFg = colors.success;
+            gutterFg = colors.success;
+            break;
+          case "removed":
+            prefix = "-";
+            lineFg = colors.error;
+            gutterFg = colors.error;
+            break;
+          default:
+            prefix = " ";
+            lineFg = colors.text;
+            gutterFg = colors.textMuted;
         }
 
         return (
-          <box key={`${i}`} height={1}>
-            <text fg={fg}>{line || " "}</text>
+          <box key={`l${i}`} height={1} flexDirection="row">
+            {/* Old line number */}
+            <text fg={colors.textMuted}>{oldNum} </text>
+            {/* New line number */}
+            <text fg={colors.textMuted}>{newNum} </text>
+            {/* +/- gutter */}
+            <text fg={gutterFg}>{prefix} </text>
+            {/* Line content */}
+            <text fg={lineFg}>{line.content || " "}</text>
           </box>
         );
       })}
