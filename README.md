@@ -1,5 +1,8 @@
 # dough
 
+> Hello, World! 👋 Welcome to Dough — an AI agent platform built on Bun.
+
+
 To install dependencies:
 
 ```bash
