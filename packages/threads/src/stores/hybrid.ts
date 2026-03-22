@@ -188,14 +188,33 @@ export class HybridThreadStore implements ThreadStore {
   }
 
   /**
+   * Count lines in a JSONL blob without parsing JSON.
+   * Fast O(N) string scan — no deserialization overhead.
+   */
+  private async countBlob(threadId: string): Promise<number> {
+    const file = Bun.file(this.blobPath(threadId));
+    if (!(await file.exists())) return 0;
+    const text = await file.text();
+    return text.trim() ? text.trim().split("\n").filter(Boolean).length : 0;
+  }
+
+  /**
    * List metadata for all threads across ALL sessions, newest first.
+   * Includes a real messageCount derived from the JSONL line count
+   * (avoids loading and parsing every message blob).
    * Used by the server for global session/thread sync.
    */
-  async listAll(): Promise<Omit<Thread, "messages">[]> {
+  async listAll(): Promise<Array<Omit<Thread, "messages"> & { messageCount: number }>> {
     const rows = this.db
       .query("SELECT * FROM threads ORDER BY updated_at DESC")
       .all() as Record<string, unknown>[];
-    return rows.map((row) => this.rowToPartialThread(row));
+    return Promise.all(
+      rows.map(async (row) => {
+        const meta = this.rowToPartialThread(row);
+        const messageCount = await this.countBlob(meta.id);
+        return { ...meta, messageCount };
+      })
+    );
   }
 
   async delete(threadId: string): Promise<void> {

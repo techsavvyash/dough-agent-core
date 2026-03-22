@@ -326,6 +326,12 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
                 found = await agent.resumeSession(record.id, record.activeThreadId);
                 sessions.set(found.id, found);
                 console.log(`[ws] reconstructed session ${record.id} for switch_thread`);
+              } else {
+                // Session predates persistence (no SQLite record). Reconstruct
+                // a minimal session directly from the sessionId + target thread.
+                found = await agent.resumeSession(msg.sessionId, msg.threadId);
+                sessions.set(found.id, found);
+                console.log(`[ws] ghost-reconstructed session ${msg.sessionId} for switch_thread`);
               }
             }
             if (found) {
@@ -417,7 +423,8 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
             const threads = await tm.listThreads(msg.sessionId);
             threadMetas = threads.map((t) => ThreadManager.toMeta(t));
           } else {
-            // No sessionId — return all threads across all sessions from the store
+            // No sessionId — return all threads across all sessions from the store.
+            // listAll() now includes real messageCount from JSONL line counts.
             const all = store ? await store.listAll() : [];
             threadMetas = all.map((t) => ({
               id: t.id,
@@ -427,7 +434,7 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
               status: t.status,
               tokenCount: t.tokenCount,
               maxTokens: t.maxTokens,
-              messageCount: 0, // metadata only; avoid loading all blobs
+              messageCount: t.messageCount,
               summary: t.summary,
               createdAt: t.createdAt,
               updatedAt: t.updatedAt,
