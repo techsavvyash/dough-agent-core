@@ -225,9 +225,15 @@ export class FileTracker {
     const diffs: FileDiff[] = [];
 
     for (const [filePath, stat] of this.statsCache) {
+      // Use null-to-empty-string so createPatch always gets a string
       const before = this.snapshots.get(filePath) ?? "";
       const after = this.current.get(filePath) ?? "";
-      const unifiedDiff = createPatch(filePath, before, after, "original", "modified");
+
+      // 8 context lines — more than the default 4 for better readability in
+      // the unified view; the split view uses beforeText/afterText for the full file
+      const unifiedDiff = createPatch(
+        filePath, before, after, "original", "modified", { context: 8 }
+      );
 
       diffs.push({
         filePath,
@@ -236,6 +242,9 @@ export class FileTracker {
         linesAdded: stat.linesAdded,
         linesRemoved: stat.linesRemoved,
         language: extToLanguage(filePath),
+        // Full file content lets the TUI render a complete side-by-side view
+        beforeText: before,
+        afterText: after,
       });
     }
 

@@ -32,6 +32,17 @@ export interface FileDiff {
   linesRemoved: number;
   /** Language for syntax highlighting (derived from file extension) */
   language?: string;
+  /**
+   * Full original file content — populated by the server so the TUI can render
+   * the entire file in side-by-side split view (not just the changed hunks).
+   * Empty string = file did not exist before (new file).
+   */
+  beforeText?: string;
+  /**
+   * Full modified file content — populated by the server for split-view rendering.
+   * Empty string = file was deleted.
+   */
+  afterText?: string;
 }
 
 /** Full diff payload sent when the user enters diff mode */
