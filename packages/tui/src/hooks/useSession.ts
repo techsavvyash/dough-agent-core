@@ -27,6 +27,8 @@ export function useSession(client: DoughClient) {
   const [session, setSession] = useState<SessionMeta | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  /** Number of messages waiting in the server queue (not yet running). */
+  const [queuedCount, setQueuedCount] = useState(0);
 
   useEffect(() => {
     const unsubEvent = client.onEvent((event: DoughEvent) => {
@@ -165,6 +167,8 @@ export function useSession(client: DoughClient) {
 
         case DoughEventType.Finished:
           setIsStreaming(false);
+          // One queued message (if any) is now starting — decrement the counter.
+          setQueuedCount((prev) => Math.max(0, prev - 1));
           // Mark any remaining pending tool calls as success
           setMessages((prev) =>
             prev.map((msg) => {
@@ -187,6 +191,8 @@ export function useSession(client: DoughClient) {
 
         case DoughEventType.Aborted:
           setIsStreaming(false);
+          // Abort clears the entire server queue.
+          setQueuedCount(0);
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last?.isStreaming) {
@@ -236,12 +242,18 @@ export function useSession(client: DoughClient) {
     const unsubConnect = client.onConnect(() => setConnected(true));
     const unsubDisconnect = client.onDisconnect(() => setConnected(false));
 
+    // Each message_queued from the server means one more prompt is waiting.
+    const unsubQueue = client.onQueueUpdate(() => {
+      setQueuedCount((prev) => prev + 1);
+    });
+
     return () => {
       unsubEvent();
       unsubSession();
       unsubError();
       unsubConnect();
       unsubDisconnect();
+      unsubQueue();
     };
   }, [client]);
 
@@ -286,6 +298,7 @@ export function useSession(client: DoughClient) {
   return {
     messages,
     isStreaming,
+    queuedCount,
     session,
     error,
     connected,

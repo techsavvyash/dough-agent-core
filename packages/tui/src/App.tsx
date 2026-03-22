@@ -1,13 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { DoughClient } from "./client.ts";
 import { useSession } from "./hooks/useSession.ts";
 import { useChangeStats } from "./hooks/useChangeStats.ts";
 import { useThreads } from "./hooks/useThreads.ts";
+import { loadLastSessionId, saveLastSessionId } from "./utils/sessionStore.ts";
 import { Header } from "./components/Header.tsx";
 import { ChatView } from "./components/ChatView.tsx";
-import { InputBar } from "./components/InputBar.tsx";
-import { StatusLine } from "./components/StatusLine.tsx";
+import { Composer } from "./components/Composer.tsx";
 import { DiffView } from "./components/DiffView.tsx";
 import { ThreadViewer } from "./components/ThreadViewer.tsx";
 import {
@@ -27,6 +27,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
   const {
     messages,
     isStreaming,
+    queuedCount,
     session,
     error,
     connected,
@@ -37,7 +38,8 @@ export function App({ serverUrl, provider, model }: AppProps) {
   } = useSession(client);
   const { stats, diffPayload, requestDiffs, clearDiffs, hasChanges } =
     useChangeStats(client);
-  const { threads, requestThreads } = useThreads(client);
+  const { threads, requestThreads, requestAllThreads } = useThreads(client);
+  const { height: termHeight } = useTerminalDimensions();
   const [initError, setInitError] = useState<string | null>(null);
   const [showPalette, setShowPalette] = useState(false);
   const [showDiffView, setShowDiffView] = useState(false);
@@ -55,20 +57,51 @@ export function App({ serverUrl, provider, model }: AppProps) {
     }
     // Ctrl+T to open thread viewer
     if (key.ctrl && key.name === "t" && noOverlay) {
-      if (session?.id) {
-        requestThreads(session.id);
-        setShowThreadViewer(true);
-      }
+      requestAllThreads();
+      setShowThreadViewer(true);
     }
   });
 
+  // Persist session ID whenever a new session is received
   useEffect(() => {
+    if (session?.id) {
+      saveLastSessionId(session.id);
+    }
+  }, [session?.id]);
+
+  useEffect(() => {
+    let settled = false;
+
     client
       .connect()
-      .then(() => {
-        client.createSession(provider, model);
+      .then(async () => {
+        const lastId = await loadLastSessionId();
+
+        if (lastId) {
+          // Try to resume the previous session first
+          const unsubError = client.onError((_msg: string, code?: string) => {
+            if (code === "SESSION_NOT_FOUND" && !settled) {
+              settled = true;
+              unsubError();
+              // Server doesn't know this session — start fresh
+              client.createSession(provider, model);
+            }
+          });
+
+          const unsubSession = client.onSession(() => {
+            if (!settled) {
+              settled = true;
+              unsubError();
+              unsubSession();
+            }
+          });
+
+          client.resume(lastId);
+        } else {
+          client.createSession(provider, model);
+        }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         setInitError(
           err instanceof Error ? err.message : "Failed to connect"
         );
@@ -140,20 +173,15 @@ export function App({ serverUrl, provider, model }: AppProps) {
           addSystemMessage(
             "Compacting: summarizing context and handing off to new thread..."
           );
-          // The server handles handoff automatically when tokens exceed the cap.
-          // For manual compact, send a signal to the server.
           send("/compact");
           break;
         }
 
         case "thread_list":
         case "thread list": {
-          if (session?.id) {
-            requestThreads(session.id);
-            setShowThreadViewer(true);
-          } else {
-            addSystemMessage("No active session.");
-          }
+          // Fetch all threads across all sessions (not just the current one)
+          requestAllThreads();
+          setShowThreadViewer(true);
           break;
         }
 
@@ -166,7 +194,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
           addSystemMessage(`Unknown command: ${cmd}`);
       }
     },
-    [session, client, provider, model, send, clearMessages, addSystemMessage, requestThreads]
+    [session, client, provider, model, send, clearMessages, addSystemMessage, requestThreads, requestAllThreads]
   );
 
   const handlePaletteSelect = useCallback(
@@ -177,6 +205,16 @@ export function App({ serverUrl, provider, model }: AppProps) {
     [executeCommand]
   );
 
+  const handleSwitchThread = useCallback(
+    (thread: import("@dough/protocol").ThreadMeta) => {
+      client.switchThread(thread.id, thread.sessionId);
+      setShowThreadViewer(false);
+      clearMessages();
+      addSystemMessage(`Switching to thread ${thread.id.slice(0, 8)}…`);
+    },
+    [client, clearMessages, addSystemMessage]
+  );
+
   // Full-screen thread viewer overlay
   if (showThreadViewer) {
     return (
@@ -184,6 +222,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
         threads={threads}
         activeThreadId={session?.activeThreadId ?? ""}
         onClose={() => setShowThreadViewer(false)}
+        onSwitch={handleSwitchThread}
       />
     );
   }
@@ -203,9 +242,11 @@ export function App({ serverUrl, provider, model }: AppProps) {
 
   return (
     <box flexDirection="column" height="100%">
+      {/* ── Header ─────────────────────────────── fixed top */}
       <Header session={session} connected={connected} />
 
-      <scrollbox flex={1} focused={false}>
+      {/* ── Chat area ──────────────────────────── fills middle, scrollable */}
+      <scrollbox flex={1} stickyScroll stickyStart="bottom">
         {initError ? (
           <box paddingX={2} flexDirection="column" gap={1}>
             <text fg={colors.error}>Connection error: {initError}</text>
@@ -218,12 +259,14 @@ export function App({ serverUrl, provider, model }: AppProps) {
         )}
       </scrollbox>
 
+      {/* ── Error banner ───────────────────────── conditional */}
       {error && (
-        <box paddingX={2}>
+        <box paddingX={2} height={1}>
           <text fg={colors.error}>{error}</text>
         </box>
       )}
 
+      {/* ── Command palette ────────────────────── inline above composer, scrollbox shrinks */}
       {showPalette && (
         <CommandPalette
           commands={COMMANDS}
@@ -231,19 +274,17 @@ export function App({ serverUrl, provider, model }: AppProps) {
           onClose={() => setShowPalette(false)}
         />
       )}
-      {!showPalette && (
-        <>
-          <InputBar
-            onSubmit={handleSubmit}
-            isStreaming={isStreaming}
-            onAbort={abort}
-          />
-          <StatusLine
-            stats={stats}
-            diffModeHint={hasChanges ? "Ctrl+D for diffs" : ""}
-          />
-        </>
-      )}
+
+      {/* ── Composer ───────────────────────────── fixed bottom, first-class */}
+      <Composer
+        onSubmit={handleSubmit}
+        isStreaming={isStreaming}
+        queuedCount={queuedCount}
+        onAbort={abort}
+        onOpenPalette={() => setShowPalette(true)}
+        stats={stats}
+        hasChanges={hasChanges}
+      />
     </box>
   );
 }

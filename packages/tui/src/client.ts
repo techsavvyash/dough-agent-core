@@ -19,6 +19,7 @@ type ThreadsHandler = (threads: ThreadMeta[]) => void;
 type McpStatusHandler = (servers: McpServerStatus[]) => void;
 type SkillsHandler = (skills: SkillStatus[]) => void;
 type SkillContentHandler = (name: string, instructions: string) => void;
+type QueueUpdateHandler = (position: number) => void;
 
 export class DoughClient {
   private ws: WebSocket | null = null;
@@ -32,6 +33,7 @@ export class DoughClient {
   private mcpStatusHandlers = new Set<McpStatusHandler>();
   private skillsHandlers = new Set<SkillsHandler>();
   private skillContentHandlers = new Set<SkillContentHandler>();
+  private queueUpdateHandlers = new Set<QueueUpdateHandler>();
 
   constructor(private serverUrl: string = "ws://localhost:4200/ws") {}
 
@@ -79,6 +81,9 @@ export class DoughClient {
           case "skill_content":
             for (const h of this.skillContentHandlers) h(msg.name, msg.instructions);
             break;
+          case "message_queued":
+            for (const h of this.queueUpdateHandlers) h(msg.position);
+            break;
           case "error":
             for (const h of this.errorHandlers) h(msg.message, msg.code);
             break;
@@ -122,8 +127,12 @@ export class DoughClient {
     this.sendMessage({ kind: "get_diffs" });
   }
 
-  listThreads(sessionId: string): void {
+  listThreads(sessionId?: string): void {
     this.sendMessage({ kind: "list_threads", sessionId });
+  }
+
+  switchThread(threadId: string, sessionId: string): void {
+    this.sendMessage({ kind: "switch_thread", threadId, sessionId });
   }
 
   onEvent(handler: EventHandler): () => void {
@@ -198,6 +207,11 @@ export class DoughClient {
   onSkillContent(handler: SkillContentHandler): () => void {
     this.skillContentHandlers.add(handler);
     return () => this.skillContentHandlers.delete(handler);
+  }
+
+  onQueueUpdate(handler: QueueUpdateHandler): () => void {
+    this.queueUpdateHandlers.add(handler);
+    return () => this.queueUpdateHandlers.delete(handler);
   }
 
   disconnect(): void {

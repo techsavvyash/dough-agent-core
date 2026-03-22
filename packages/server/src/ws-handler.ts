@@ -12,6 +12,10 @@ export interface WSData {
   sessionId: string | null;
   session: DoughSession | null;
   fileTracker: FileTracker;
+  /** Prompts waiting to run once the current agent turn completes. */
+  sendQueue: string[];
+  /** True while drainQueue() is iterating; prevents concurrent drains. */
+  isProcessingQueue: boolean;
 }
 
 /** Tool names that write to files — we intercept these for diffing */
@@ -37,21 +41,129 @@ function extractFilePath(args: Record<string, unknown>): string | null {
 
 export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
   const sessions = new Map<string, DoughSession>();
-  /** One FileTracker per WS connection (per session) */
-  const trackers = new Map<string, FileTracker>();
   /**
    * Tracks in-flight Bash tool calls so we can inspect the command after the
    * result comes back. Keyed by callId. Cleared on response.
    */
   const pendingBashCalls = new Map<string, string>(); // callId → command string
 
-  function getTracker(ws: ServerWebSocket<WSData>): FileTracker {
-    return ws.data.fileTracker;
+  // ── Send-queue helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Run one full agent turn for `prompt` on `session`, streaming all events
+   * back over `ws`. Extracted so drainQueue() can call it serially.
+   */
+  async function processOneSend(
+    ws: ServerWebSocket<WSData>,
+    session: DoughSession,
+    prompt: string
+  ): Promise<void> {
+    const tracker = ws.data.fileTracker;
+
+    const unsubStats = tracker.onChange((stats) => {
+      const statsMsg: ServerMessage = {
+        kind: "event",
+        event: { type: DoughEventType.ChangeStatsUpdate, stats },
+      };
+      ws.send(JSON.stringify(statsMsg));
+    });
+
+    try {
+      for await (const event of session.send(prompt)) {
+        // ── Bash git-commit interception (attribution) ──────────────
+        if (
+          event.type === DoughEventType.ToolCallRequest &&
+          event.name === "Bash" &&
+          typeof event.args.command === "string"
+        ) {
+          pendingBashCalls.set(event.callId, event.args.command as string);
+        }
+
+        if (event.type === DoughEventType.ToolCallResponse && !event.isError) {
+          const bashCmd = pendingBashCalls.get(event.callId);
+          if (bashCmd !== undefined) {
+            pendingBashCalls.delete(event.callId);
+            if (isGitCommitCommand(bashCmd)) {
+              await appendAttributionTrailer(agent.getCwd());
+            }
+          }
+        }
+
+        // ── File write tracking (diffing) ────────────────────────────
+        if (
+          event.type === DoughEventType.ToolCallRequest &&
+          FILE_WRITE_TOOLS.has(event.name)
+        ) {
+          const filePath = extractFilePath(event.args);
+          if (filePath) await tracker.snapshotBefore(filePath);
+        }
+
+        if (
+          event.type === DoughEventType.ToolCallResponse &&
+          !event.isError
+        ) {
+          for (const filePath of tracker["snapshots"].keys()) {
+            await tracker.recordAfter(filePath);
+          }
+        }
+
+        if (
+          event.type === DoughEventType.ToolCallRequest &&
+          FILE_DELETE_TOOLS.has(event.name)
+        ) {
+          const filePath = extractFilePath(event.args);
+          if (filePath) await tracker.recordDelete(filePath);
+        }
+
+        ws.send(JSON.stringify({ kind: "event", event } as ServerMessage));
+      }
+    } catch (error) {
+      const err: ServerMessage = {
+        kind: "error",
+        message: error instanceof Error ? error.message : "Unknown error",
+      };
+      ws.send(JSON.stringify(err));
+    } finally {
+      unsubStats();
+      if (store && session.currentThreadId) {
+        const rec = store.loadSession(session.id);
+        if (rec) {
+          store.saveSession({
+            ...rec,
+            activeThreadId: session.currentThreadId,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+    }
   }
+
+  /**
+   * Drain ws.data.sendQueue serially — one turn at a time.
+   * Fire-and-forget: call without await from the message handler.
+   * The isProcessingQueue flag ensures only one drain loop runs per connection.
+   */
+  async function drainQueue(ws: ServerWebSocket<WSData>): Promise<void> {
+    if (ws.data.isProcessingQueue) return;
+    ws.data.isProcessingQueue = true;
+
+    while (ws.data.sendQueue.length > 0) {
+      const session = ws.data.session;
+      if (!session) break;
+      const prompt = ws.data.sendQueue.shift()!;
+      await processOneSend(ws, session, prompt);
+    }
+
+    ws.data.isProcessingQueue = false;
+  }
+
+  // ── WebSocket handler ───────────────────────────────────────────────────────
 
   return {
     open(ws: ServerWebSocket<WSData>) {
       ws.data.fileTracker = new FileTracker();
+      ws.data.sendQueue = [];
+      ws.data.isProcessingQueue = false;
       console.log("[ws] client connected");
     },
 
@@ -80,7 +192,7 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
           });
 
           // Reset file tracker for new session
-          getTracker(ws).reset();
+          ws.data.fileTracker.reset();
 
           // Fetch the initial thread metadata
           const tm = agent.getThreadManager();
@@ -115,111 +227,24 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
             return;
           }
 
-          const tracker = getTracker(ws);
+          // Enqueue the prompt. If something is already running, notify the
+          // client that this message is queued and will run when the current
+          // turn completes. drainQueue() is idempotent — safe to call every time.
+          ws.data.sendQueue.push(msg.prompt);
+          const position = ws.data.sendQueue.length;
 
-          // Subscribe to stats changes and forward to client
-          const unsubStats = tracker.onChange((stats) => {
-            const statsMsg: ServerMessage = {
-              kind: "event",
-              event: {
-                type: DoughEventType.ChangeStatsUpdate,
-                stats,
-              },
-            };
-            ws.send(JSON.stringify(statsMsg));
-          });
-
-          try {
-            for await (const event of session.send(msg.prompt)) {
-              // ── Bash git-commit interception (attribution) ──────────────
-              // Record every Bash call so we can inspect it on completion.
-              if (
-                event.type === DoughEventType.ToolCallRequest &&
-                event.name === "Bash" &&
-                typeof event.args.command === "string"
-              ) {
-                pendingBashCalls.set(event.callId, event.args.command as string);
-              }
-
-              // After a Bash call completes, check if it was `git commit`.
-              // If so, immediately amend HEAD to append the attribution trailer.
-              if (event.type === DoughEventType.ToolCallResponse && !event.isError) {
-                const bashCmd = pendingBashCalls.get(event.callId);
-                if (bashCmd !== undefined) {
-                  pendingBashCalls.delete(event.callId);
-                  if (isGitCommitCommand(bashCmd)) {
-                    await appendAttributionTrailer(agent.getCwd());
-                  }
-                }
-              }
-
-              // ── File write tracking (diffing) ────────────────────────────
-              // Intercept tool calls that write files — snapshot before
-              if (
-                event.type === DoughEventType.ToolCallRequest &&
-                FILE_WRITE_TOOLS.has(event.name)
-              ) {
-                const filePath = extractFilePath(event.args);
-                if (filePath) {
-                  await tracker.snapshotBefore(filePath);
-                }
-              }
-
-              // After tool call completes, record the new file state
-              if (
-                event.type === DoughEventType.ToolCallResponse &&
-                !event.isError
-              ) {
-                // We need the original tool call to know which file changed.
-                // The session should include the file path in the response.
-                // For now, re-read all snapshotted files to detect changes.
-                for (const filePath of tracker["snapshots"].keys()) {
-                  if (!tracker["current"].has(filePath) || true) {
-                    await tracker.recordAfter(filePath);
-                  }
-                }
-              }
-
-              // Intercept file deletion tool calls
-              if (
-                event.type === DoughEventType.ToolCallRequest &&
-                FILE_DELETE_TOOLS.has(event.name)
-              ) {
-                const filePath = extractFilePath(event.args);
-                if (filePath) {
-                  await tracker.recordDelete(filePath);
-                }
-              }
-
-              const reply: ServerMessage = { kind: "event", event };
-              ws.send(JSON.stringify(reply));
-            }
-          } catch (error) {
-            const err: ServerMessage = {
-              kind: "error",
-              message:
-                error instanceof Error ? error.message : "Unknown error",
-            };
-            ws.send(JSON.stringify(err));
-          } finally {
-            unsubStats();
-            // Update the persisted session with the latest activeThreadId
-            // (may have changed due to a handoff during the exchange)
-            if (store && session.currentThreadId) {
-              const rec = store.loadSession(session.id);
-              if (rec) {
-                store.saveSession({
-                  ...rec,
-                  activeThreadId: session.currentThreadId,
-                  updatedAt: new Date().toISOString(),
-                });
-              }
-            }
+          if (position > 1) {
+            const queued: ServerMessage = { kind: "message_queued", position };
+            ws.send(JSON.stringify(queued));
           }
+
+          drainQueue(ws); // fire-and-forget — serialises automatically via isProcessingQueue
           break;
         }
 
         case "abort": {
+          // Clear pending queue first so no new turns start after the abort.
+          ws.data.sendQueue = [];
           ws.data.session?.abort();
           break;
         }
@@ -359,7 +384,7 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
         }
 
         case "get_diffs": {
-          const tracker = getTracker(ws);
+          const tracker = ws.data.fileTracker;
           const sessionId = ws.data.sessionId ?? "unknown";
           const threadId = ws.data.session?.currentThreadId ?? undefined;
           const payload = tracker.getDiffs(sessionId, threadId);
