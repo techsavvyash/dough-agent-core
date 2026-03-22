@@ -8,6 +8,7 @@ import type {
   McpServerConfig,
   McpServerStatus,
   SkillStatus,
+  HistoricalMessage,
 } from "@dough/protocol";
 
 type EventHandler = (event: DoughEvent) => void;
@@ -20,6 +21,7 @@ type McpStatusHandler = (servers: McpServerStatus[]) => void;
 type SkillsHandler = (skills: SkillStatus[]) => void;
 type SkillContentHandler = (name: string, instructions: string) => void;
 type QueueUpdateHandler = (position: number) => void;
+type ThreadHistoryHandler = (threadId: string, messages: HistoricalMessage[]) => void;
 
 export class DoughClient {
   private ws: WebSocket | null = null;
@@ -34,6 +36,7 @@ export class DoughClient {
   private skillsHandlers = new Set<SkillsHandler>();
   private skillContentHandlers = new Set<SkillContentHandler>();
   private queueUpdateHandlers = new Set<QueueUpdateHandler>();
+  private threadHistoryHandlers = new Set<ThreadHistoryHandler>();
 
   constructor(private serverUrl: string = "ws://localhost:4200/ws") {}
 
@@ -83,6 +86,9 @@ export class DoughClient {
             break;
           case "message_queued":
             for (const h of this.queueUpdateHandlers) h(msg.position);
+            break;
+          case "thread_history":
+            for (const h of this.threadHistoryHandlers) h(msg.threadId, msg.messages);
             break;
           case "error":
             for (const h of this.errorHandlers) h(msg.message, msg.code);
@@ -212,6 +218,11 @@ export class DoughClient {
   onQueueUpdate(handler: QueueUpdateHandler): () => void {
     this.queueUpdateHandlers.add(handler);
     return () => this.queueUpdateHandlers.delete(handler);
+  }
+
+  onThreadHistory(handler: ThreadHistoryHandler): () => void {
+    this.threadHistoryHandlers.add(handler);
+    return () => this.threadHistoryHandlers.delete(handler);
   }
 
   disconnect(): void {

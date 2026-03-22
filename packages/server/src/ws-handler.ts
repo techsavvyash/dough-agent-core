@@ -174,6 +174,34 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
     ws.data.isProcessingQueue = false;
   }
 
+  // ── Thread history helper ───────────────────────────────────────────────────
+
+  /**
+   * Load a thread from the store and send its messages to the client as a
+   * `thread_history` message.  Called after switch_thread and resume so the
+   * TUI can display prior conversation without waiting for a new turn.
+   */
+  async function sendThreadHistory(
+    ws: ServerWebSocket<WSData>,
+    threadId: string
+  ): Promise<void> {
+    const tm = agent.getThreadManager();
+    const thread = await tm.getThread(threadId);
+    if (!thread || thread.messages.length === 0) return;
+
+    const reply: ServerMessage = {
+      kind: "thread_history",
+      threadId,
+      messages: thread.messages.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant" | "system",
+        content: m.content,
+        timestamp: m.timestamp,
+      })),
+    };
+    ws.send(JSON.stringify(reply));
+  }
+
   // ── WebSocket handler ───────────────────────────────────────────────────────
 
   return {
@@ -302,6 +330,11 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
               },
             };
             ws.send(JSON.stringify(reply));
+
+            // Send thread history so the TUI can populate the message panel
+            if (resumed.currentThreadId) {
+              await sendThreadHistory(ws, resumed.currentThreadId);
+            }
           } else {
             const err: ServerMessage = {
               kind: "error",
@@ -383,6 +416,11 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
             },
           };
           ws.send(JSON.stringify(switchReply));
+
+          // Send thread history so the TUI shows the prior conversation
+          if (targetSession.currentThreadId) {
+            await sendThreadHistory(ws, targetSession.currentThreadId);
+          }
           break;
         }
 

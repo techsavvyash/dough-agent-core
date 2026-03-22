@@ -4,6 +4,18 @@ import type { DiffPayload } from "./snapshots.ts";
 import type { McpServerConfig, McpServerStatus } from "./mcp.ts";
 import type { SkillStatus } from "./skills.ts";
 
+/**
+ * A single message from a persisted thread's history.
+ * Intentionally minimal — the full SDK transcript lives in the provider's
+ * own session files; what Dough stores is user prompts + final assistant text.
+ */
+export interface HistoricalMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp: string;
+}
+
 // Client → Server
 export type ClientMessage =
   | { kind: "send"; prompt: string; threadId?: string }
@@ -42,4 +54,9 @@ export type ServerMessage =
   | { kind: "mcp_status"; servers: McpServerStatus[] }
   // Skills responses
   | { kind: "skills_status"; skills: SkillStatus[] }
-  | { kind: "skill_content"; name: string; instructions: string };
+  | { kind: "skill_content"; name: string; instructions: string }
+  /**
+   * Historical messages for the active thread, sent after a switch_thread or
+   * resume so the TUI can populate its message panel with prior conversation.
+   */
+  | { kind: "thread_history"; threadId: string; messages: HistoricalMessage[] };

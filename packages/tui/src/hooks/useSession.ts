@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { DoughEventType } from "@dough/protocol";
-import type { DoughEvent, SessionMeta } from "@dough/protocol";
+import type { DoughEvent, SessionMeta, HistoricalMessage } from "@dough/protocol";
 import type { DoughClient } from "../client.ts";
 
 export interface ToolCallEntry {
@@ -247,6 +247,21 @@ export function useSession(client: DoughClient) {
       setQueuedCount((prev) => prev + 1);
     });
 
+    // Thread history: replace current messages with historical ones after
+    // a switch_thread or resume, so the user can see the prior conversation.
+    const unsubHistory = client.onThreadHistory(
+      (_threadId: string, history: HistoricalMessage[]) => {
+        const historical: Message[] = history.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp,
+        }));
+        setMessages(historical);
+        setError(null);
+      }
+    );
+
     return () => {
       unsubEvent();
       unsubSession();
@@ -254,6 +269,7 @@ export function useSession(client: DoughClient) {
       unsubConnect();
       unsubDisconnect();
       unsubQueue();
+      unsubHistory();
     };
   }, [client]);
 
