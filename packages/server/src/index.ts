@@ -15,7 +15,8 @@ const agent = new DoughAgent({
   threadStore,
 });
 
-const wsHandler = createWSHandler(agent, threadStore);
+// threadStore is HybridThreadStore — it implements both ThreadStore and FileDiffStore
+const wsHandler = createWSHandler(agent, threadStore, threadStore);
 
 const server = Bun.serve<WSData>({
   port: PORT,

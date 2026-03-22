@@ -5,8 +5,19 @@ import type { DoughSession } from "@dough/core";
 import { DoughAgent } from "@dough/core";
 import { isGitCommitCommand, appendAttributionTrailer } from "@dough/core";
 import { ThreadManager } from "@dough/threads";
-import type { HybridThreadStore } from "@dough/threads";
+import type { ThreadStore, FileDiffRecord } from "@dough/threads";
 import { FileTracker } from "./file-tracker.ts";
+import type { FileTrackerPersistence } from "./file-tracker.ts";
+
+/**
+ * Narrow interface for diff persistence — implemented by HybridThreadStore.
+ * Defined here so ws-handler doesn't need to import the concrete store class.
+ */
+export interface FileDiffStore {
+  saveFileDiff(record: FileDiffRecord): void;
+  loadFileDiffs(sessionId: string): FileDiffRecord[];
+  clearFileDiffs(sessionId: string): void;
+}
 
 export interface WSData {
   sessionId: string | null;
@@ -48,7 +59,7 @@ function extractFilePath(args: Record<string, unknown>): string | null {
   return null;
 }
 
-export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
+export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStore?: FileDiffStore) {
   const sessions = new Map<string, DoughSession>();
   /**
    * Tracks in-flight Bash tool calls so we can inspect the command after the
@@ -143,13 +154,13 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
       }
 
       if (store && session.currentThreadId) {
-        const rec = store.loadSession(session.id);
+        const rec = await store.loadSession(session.id);
         if (rec) {
           // Also persist the provider-native session ID so it can be
           // restored after a server restart (gives the SDK full history).
           const providerSessionId =
             agent.getProvider().sessionId ?? rec.providerSessionId;
-          store.saveSession({
+          await store.saveSession({
             ...rec,
             activeThreadId: session.currentThreadId,
             providerSessionId,
@@ -211,7 +222,46 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
 
   return {
     open(ws: ServerWebSocket<WSData>) {
-      ws.data.fileTracker = new FileTracker();
+      // Build the persistence adapter that bridges FileTracker ↔ FileDiffStore.
+      // Defined here so it closes over the `diffStore` from createWSHandler.
+      const persistence: FileTrackerPersistence | undefined = diffStore
+        ? {
+            save(sessionId, filePath, beforeText, afterText, diff) {
+              diffStore.saveFileDiff({
+                sessionId,
+                filePath,
+                status: diff.status,
+                beforeText,
+                afterText,
+                unifiedDiff: diff.unifiedDiff,
+                linesAdded: diff.linesAdded,
+                linesRemoved: diff.linesRemoved,
+                language: diff.language,
+                updatedAt: new Date().toISOString(),
+              });
+            },
+            load(sessionId) {
+              return diffStore.loadFileDiffs(sessionId).map((r) => ({
+                filePath: r.filePath,
+                beforeText: r.beforeText,
+                afterText: r.afterText,
+                diff: {
+                  filePath: r.filePath,
+                  status: r.status,
+                  unifiedDiff: r.unifiedDiff,
+                  linesAdded: r.linesAdded,
+                  linesRemoved: r.linesRemoved,
+                  language: r.language,
+                },
+              }));
+            },
+            clear(sessionId) {
+              diffStore.clearFileDiffs(sessionId);
+            },
+          }
+        : undefined;
+
+      ws.data.fileTracker = new FileTracker({ persistence });
       ws.data.sendQueue = [];
       ws.data.isProcessingQueue = false;
       console.log("[ws] client connected");
@@ -232,7 +282,7 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
 
           // Persist session so it can be reconstructed after server restart
           const now = new Date().toISOString();
-          store?.saveSession({
+          await store?.saveSession({
             id: session.id,
             activeThreadId: session.currentThreadId!,
             provider: msg.provider,
@@ -241,8 +291,9 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
             updatedAt: now,
           });
 
-          // Reset file tracker for new session
+          // Reset file tracker for new session and bind it to the new session ID
           ws.data.fileTracker.reset();
+          ws.data.fileTracker.setSessionId(session.id);
 
           // Fetch the initial thread metadata
           const tm = agent.getThreadManager();
@@ -305,7 +356,7 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
 
           // Not in memory (e.g. server restarted) — try to reconstruct from DB
           if (!resumed && store) {
-            const record = store.loadSession(msg.sessionId);
+            const record = await store.loadSession(msg.sessionId);
             if (record) {
               resumed = await agent.resumeSession(
                 record.id,
@@ -321,10 +372,25 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
             ws.data.sessionId = msg.sessionId;
             ws.data.session = resumed;
 
+            // Hydrate file tracker from persisted diffs so Ctrl+D works after restart
+            ws.data.fileTracker.setSessionId(msg.sessionId);
+            ws.data.fileTracker.hydrate(msg.sessionId);
+
+            // Push ChangeStatsUpdate immediately so the TUI badge lights up without
+            // requiring the user to run another prompt first
+            const hydratedStats = ws.data.fileTracker.getStats();
+            if (hydratedStats.filesChanged > 0) {
+              const statsMsg: ServerMessage = {
+                kind: "event",
+                event: { type: DoughEventType.ChangeStatsUpdate, stats: hydratedStats },
+              };
+              ws.send(JSON.stringify(statsMsg));
+            }
+
             const tm = agent.getThreadManager();
             const resumedThreads = await tm.listThreads(resumed.id);
             const resumedMetas = resumedThreads.map((t) => ThreadManager.toMeta(t));
-            const record = store?.loadSession(msg.sessionId);
+            const record = await store?.loadSession(msg.sessionId);
 
             const reply: ServerMessage = {
               kind: "session_info",
@@ -363,7 +429,7 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
             // Cross-session switch: get or reconstruct the owning session
             let found = sessions.get(msg.sessionId);
             if (!found && store) {
-              const record = store.loadSession(msg.sessionId);
+              const record = await store.loadSession(msg.sessionId);
               if (record) {
                 found = await agent.resumeSession(
                   record.id,
@@ -402,9 +468,9 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
 
           // Persist the updated active thread
           if (store) {
-            const rec = store.loadSession(targetSession.id);
+            const rec = await store.loadSession(targetSession.id);
             if (rec) {
-              store.saveSession({
+              await store.saveSession({
                 ...rec,
                 activeThreadId: msg.threadId,
                 updatedAt: new Date().toISOString(),
@@ -415,7 +481,7 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
           // Send back updated session info
           const tm = agent.getThreadManager();
           const switchedThreads = await tm.listThreads(targetSession.id);
-          const switchRecord = store?.loadSession(targetSession.id);
+          const switchRecord = await store?.loadSession(targetSession.id);
           const switchReply: ServerMessage = {
             kind: "session_info",
             session: {

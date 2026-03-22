@@ -24,16 +24,41 @@ export interface ThreadMessage {
   metadata?: Record<string, unknown>;
 }
 
+/** Persisted session record — enough to reconstruct a DoughSession after restart. */
+export interface SessionRecord {
+  id: string;
+  activeThreadId: string;
+  provider: string;
+  model?: string;
+  /** Provider-native session ID (e.g. claude-agent-sdk's session_id). */
+  providerSessionId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Thread metadata without messages, plus a message count. */
+export type ThreadSummary = Omit<Thread, "messages"> & { messageCount: number };
+
 /**
- * Pluggable storage backend for threads.
- * Implement this to persist threads however you want:
- * in-memory, SQLite, JSONL files, Redis, etc.
+ * Pluggable storage backend for threads and sessions.
+ * Implement this to persist however you want:
+ * in-memory, SQLite, JSONL files, Postgres, Redis, etc.
  */
 export interface ThreadStore {
+  // ── Thread operations ───────────────────────────────────────
   save(thread: Thread): Promise<void>;
   load(threadId: string): Promise<Thread | null>;
   list(sessionId: string): Promise<Thread[]>;
   delete(threadId: string): Promise<void>;
+
+  // ── Session operations ──────────────────────────────────────
+  saveSession(record: SessionRecord): Promise<void>;
+  loadSession(sessionId: string): Promise<SessionRecord | null>;
+  listSessions(): Promise<SessionRecord[]>;
+
+  // ── Cross-session queries ───────────────────────────────────
+  /** List metadata for all threads across all sessions, newest first. */
+  listAll(): Promise<ThreadSummary[]>;
 }
 
 /**
@@ -70,4 +95,20 @@ export interface HandoffResult {
 export interface ForkResult {
   originalThread: Thread;
   forkedThread: Thread;
+}
+
+/** Raw persistence record for a tracked file change. Internal to server ↔ store boundary; never sent over the wire. */
+export interface FileDiffRecord {
+  sessionId: string;
+  filePath: string;
+  status: "added" | "modified" | "deleted";
+  /** Original file content before agent touched it. null = file did not exist. */
+  beforeText: string | null;
+  /** File content after agent write. null = file was deleted. */
+  afterText: string | null;
+  unifiedDiff: string;
+  linesAdded: number;
+  linesRemoved: number;
+  language?: string;
+  updatedAt: string;
 }

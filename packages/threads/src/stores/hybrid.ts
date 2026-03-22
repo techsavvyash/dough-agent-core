@@ -1,24 +1,12 @@
 import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
-import type { Thread, ThreadMessage, ThreadStore } from "../types.ts";
+import type { Thread, ThreadMessage, ThreadStore, SessionRecord, ThreadSummary, FileDiffRecord } from "../types.ts";
 
 export interface HybridThreadStoreOptions {
   /** Path to the SQLite database file. e.g. ~/.dough/dough.db */
   dbPath: string;
   /** Directory for JSONL message blob files. e.g. ~/.dough/threads */
   threadsDir: string;
-}
-
-/** Persisted session record — enough to reconstruct a DoughSession after restart. */
-export interface SessionRecord {
-  id: string;
-  activeThreadId: string;
-  provider: string;
-  model?: string;
-  /** Provider-native session ID (e.g. claude-agent-sdk's session_id). */
-  providerSessionId?: string;
-  createdAt: string;
-  updatedAt: string;
 }
 
 /**
@@ -87,6 +75,27 @@ export class HybridThreadStore implements ThreadStore {
     } catch {
       // Column already exists — safe to ignore
     }
+
+    // File diff persistence — keyed by (session_id, file_path) so each session
+    // has its own independent set of tracked changes.
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS file_diffs (
+        session_id    TEXT NOT NULL,
+        file_path     TEXT NOT NULL,
+        status        TEXT NOT NULL,
+        before_text   TEXT,
+        after_text    TEXT,
+        unified_diff  TEXT NOT NULL DEFAULT '',
+        lines_added   INTEGER NOT NULL DEFAULT 0,
+        lines_removed INTEGER NOT NULL DEFAULT 0,
+        language      TEXT,
+        updated_at    TEXT NOT NULL,
+        PRIMARY KEY (session_id, file_path)
+      )
+    `);
+    this.db.run(
+      `CREATE INDEX IF NOT EXISTS idx_file_diffs_session_id ON file_diffs(session_id)`
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -213,7 +222,7 @@ export class HybridThreadStore implements ThreadStore {
    * (avoids loading and parsing every message blob).
    * Used by the server for global session/thread sync.
    */
-  async listAll(): Promise<Array<Omit<Thread, "messages"> & { messageCount: number }>> {
+  async listAll(): Promise<ThreadSummary[]> {
     const rows = this.db
       .query("SELECT * FROM threads ORDER BY updated_at DESC")
       .all() as Record<string, unknown>[];
@@ -236,7 +245,7 @@ export class HybridThreadStore implements ThreadStore {
   // ---------------------------------------------------------------------------
 
   /** Upsert a session record (called on create and whenever activeThreadId changes). */
-  saveSession(record: SessionRecord): void {
+  async saveSession(record: SessionRecord): Promise<void> {
     this.db.run(
       `INSERT OR REPLACE INTO sessions
          (id, active_thread_id, provider, model, provider_session_id, created_at, updated_at)
@@ -254,7 +263,7 @@ export class HybridThreadStore implements ThreadStore {
   }
 
   /** Load a session record by id. Returns null if not found. */
-  loadSession(sessionId: string): SessionRecord | null {
+  async loadSession(sessionId: string): Promise<SessionRecord | null> {
     const row = this.db
       .query("SELECT * FROM sessions WHERE id = ?")
       .get(sessionId) as Record<string, unknown> | null;
@@ -271,7 +280,7 @@ export class HybridThreadStore implements ThreadStore {
   }
 
   /** List all session records, newest first. */
-  listSessions(): SessionRecord[] {
+  async listSessions(): Promise<SessionRecord[]> {
     const rows = this.db
       .query("SELECT * FROM sessions ORDER BY updated_at DESC")
       .all() as Record<string, unknown>[];
@@ -284,6 +293,58 @@ export class HybridThreadStore implements ThreadStore {
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // File diff persistence (not part of ThreadStore interface — server-only)
+  // ---------------------------------------------------------------------------
+
+  /** Upsert a single file diff row for a session. Idempotent: last write wins. */
+  saveFileDiff(record: FileDiffRecord): void {
+    this.db.run(
+      `INSERT OR REPLACE INTO file_diffs
+         (session_id, file_path, status, before_text, after_text,
+          unified_diff, lines_added, lines_removed, language, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        record.sessionId,
+        record.filePath,
+        record.status,
+        record.beforeText ?? null,
+        record.afterText ?? null,
+        record.unifiedDiff,
+        record.linesAdded,
+        record.linesRemoved,
+        record.language ?? null,
+        record.updatedAt,
+      ]
+    );
+  }
+
+  /** Load all file diff records for a session, oldest change first. Returns [] if none. */
+  loadFileDiffs(sessionId: string): FileDiffRecord[] {
+    const rows = this.db
+      .query(
+        "SELECT * FROM file_diffs WHERE session_id = ? ORDER BY updated_at ASC"
+      )
+      .all(sessionId) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      sessionId: row.session_id as string,
+      filePath: row.file_path as string,
+      status: row.status as FileDiffRecord["status"],
+      beforeText: (row.before_text as string | null) ?? null,
+      afterText: (row.after_text as string | null) ?? null,
+      unifiedDiff: row.unified_diff as string,
+      linesAdded: row.lines_added as number,
+      linesRemoved: row.lines_removed as number,
+      language: (row.language as string | null) ?? undefined,
+      updatedAt: row.updated_at as string,
+    }));
+  }
+
+  /** Delete all file diff records for a session (e.g. on new session / explicit reset). */
+  clearFileDiffs(sessionId: string): void {
+    this.db.run("DELETE FROM file_diffs WHERE session_id = ?", [sessionId]);
   }
 
   close(): void {
