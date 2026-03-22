@@ -7,6 +7,7 @@ interface InputBarProps {
   onSubmit: (text: string) => void;
   isStreaming: boolean;
   onAbort: () => void;
+  onOpenPalette?: () => void;
 }
 
 function formatElapsed(seconds: number): string {
@@ -16,7 +17,7 @@ function formatElapsed(seconds: number): string {
   return `${s}s`;
 }
 
-export function InputBar({ onSubmit, isStreaming, onAbort }: InputBarProps) {
+export function InputBar({ onSubmit, isStreaming, onAbort, onOpenPalette }: InputBarProps) {
   const inputRef = useRef<InputRenderable>(null);
   const { width } = useTerminalDimensions();
   const [elapsed, setElapsed] = useState(0);
@@ -33,6 +34,20 @@ export function InputBar({ onSubmit, isStreaming, onAbort }: InputBarProps) {
   useKeyboard((key) => {
     if (key.name === "escape" && isStreaming) {
       onAbort();
+      return;
+    }
+    // Open the command palette immediately when '?' is typed on an empty input
+    if (
+      key.sequence === "?" &&
+      !isStreaming &&
+      onOpenPalette
+    ) {
+      const currentValue = inputRef.current?.value ?? "";
+      // Trigger only if the input is empty (before the char lands) or just has "?"
+      if (currentValue === "" || currentValue === "?") {
+        if (inputRef.current) inputRef.current.value = "";
+        onOpenPalette();
+      }
     }
   });
 

@@ -5,7 +5,7 @@ interface ToolCallViewProps {
   toolCall: ToolCallEntry;
 }
 
-/** Render a single tool call with status indicator */
+/** Render a single tool call with a left-bordered highlighted box, status icon, and label. */
 export function ToolCallView({ toolCall }: ToolCallViewProps) {
   const { name, args, status, result } = toolCall;
   const icon = statusIcon(status);
@@ -16,16 +16,21 @@ export function ToolCallView({ toolCall }: ToolCallViewProps) {
   const argSummary = formatArgs(name, args);
 
   return (
-    <box flexDirection="column" paddingLeft={3}>
+    <box
+      flexDirection="column"
+      marginLeft={3}
+      paddingLeft={1}
+      border={["left"]}
+      borderStyle="single"
+      borderColor={iconColor}
+    >
       <box height={1} flexDirection="row">
         <text fg={iconColor}>{icon} </text>
-        <text fg={colors.accent}>{label}</text>
-        {argSummary && (
-          <text fg={colors.textDim}>{` ${argSummary}`}</text>
-        )}
+        <text fg={colors.textDim}>{label}</text>
+        {argSummary ? <text fg={colors.textMuted}> {argSummary}</text> : null}
       </box>
       {status === "error" && result && (
-        <box paddingLeft={4} height={1}>
+        <box paddingLeft={1} height={1}>
           <text fg={colors.error}>{String(result).slice(0, 120)}</text>
         </box>
       )}
@@ -57,7 +62,6 @@ function statusColor(status: ToolCallEntry["status"]): string {
 
 /** Make tool names human-readable */
 function formatToolName(name: string): string {
-  // Common tool name patterns
   const labels: Record<string, string> = {
     read_file: "Read",
     write_file: "Write",
@@ -79,14 +83,10 @@ function formatToolName(name: string): string {
 }
 
 /** Format tool args into a compact one-line summary */
-function formatArgs(
-  name: string,
-  args: Record<string, unknown>
-): string {
+function formatArgs(name: string, args: Record<string, unknown>): string {
   // File operations — show the path
   if (args.file_path || args.path || args.filePath) {
     const p = String(args.file_path ?? args.path ?? args.filePath);
-    // Show just the filename or last path segment
     const short = p.split("/").pop() ?? p;
     return short;
   }

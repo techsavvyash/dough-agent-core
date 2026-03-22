@@ -12,17 +12,17 @@ export function StatusLine({ stats, diffModeHint }: StatusLineProps) {
   }
 
   const fileLabel = stats.filesChanged === 1 ? "file" : "files";
-  const statsText = `${stats.filesChanged} ${fileLabel} changed`;
-  const addedText = `+${stats.totalAdded}`;
-  const removedText = `-${stats.totalRemoved}`;
+  const parts = [
+    `${symbols.dot} ${stats.filesChanged} ${fileLabel} changed`,
+    `+${stats.totalAdded}`,
+    `-${stats.totalRemoved}`,
+  ];
+  if (diffModeHint) parts.push(` ${diffModeHint}`);
+  const statusText = parts.join(" ");
 
   return (
-    <box height={1} paddingX={2} flexDirection="row" gap={1}>
-      <text fg={colors.textMuted}>{symbols.dot} </text>
-      <text fg={colors.accent}>{statsText}</text>
-      <text fg={colors.success}>{addedText}</text>
-      <text fg={colors.error}>{removedText}</text>
-      <text fg={colors.textMuted}>{`  ${diffModeHint}`}</text>
+    <box height={1} paddingX={2}>
+      <text fg={colors.textMuted}>{statusText}</text>
     </box>
   );
 }

@@ -40,6 +40,10 @@ export const symbols = {
   thought: "💭",
   // Context warning
   contextWarn: "⚠",
+  // Message type icons (gemini-cli style)
+  info: "ℹ",
+  errorIcon: "✕",
+  hint: "💡",
 } as const;
 
 export function hrule(width: number): string {

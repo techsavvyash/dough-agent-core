@@ -16,12 +16,14 @@ describe("CommandPalette", () => {
     await renderOnce();
     const frame = captureCharFrame();
 
-    expect(frame).toContain("Commands");
+    expect(frame).toContain("filter");
+    // First 5 commands visible (windowed, MAX_VISIBLE=5)
     expect(frame).toContain("/thread info");
     expect(frame).toContain("/thread list");
     expect(frame).toContain("/thread fork");
     expect(frame).toContain("/clear");
-    expect(frame).toContain("/exit");
+    // Shows count indicator for windowed list
+    expect(frame).toContain("1/7");
   });
 
   test("first item is selected by default", async () => {

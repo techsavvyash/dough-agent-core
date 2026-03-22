@@ -26,8 +26,8 @@ export function Header({ session, connected }: HeaderProps) {
   const infoLine = provider + (model ? ` · ${model}` : "");
 
   return (
-    <box flexDirection="column" paddingX={1} marginTop={1} marginBottom={1}>
-      <box flexDirection="row">
+    <box flexDirection="column" paddingX={1} height={8}>
+      <box flexDirection="row" marginTop={1}>
         <box flexDirection="column" width={13}>
           {logo.map((line, i) => (
             <box key={i} height={1}>

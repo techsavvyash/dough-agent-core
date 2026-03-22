@@ -19,5 +19,10 @@ export function useThreads(client: DoughClient) {
     [client]
   );
 
-  return { threads, requestThreads };
+  /** Fetch all threads across every known session (no sessionId filter). */
+  const requestAllThreads = useCallback(() => {
+    client.listThreads();
+  }, [client]);
+
+  return { threads, requestThreads, requestAllThreads };
 }
