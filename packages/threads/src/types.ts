@@ -1,9 +1,11 @@
-import type { ThreadStatus } from "@dough/protocol";
+import type { ThreadStatus, ThreadOrigin } from "@dough/protocol";
 
 export interface Thread {
   id: string;
   sessionId: string;
   parentThreadId?: string;
+  /** How this thread was created: root (first), handoff (context overflow), fork (user branched) */
+  origin: ThreadOrigin;
   status: ThreadStatus;
   tokenCount: number;
   maxTokens: number;

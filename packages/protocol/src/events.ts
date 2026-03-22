@@ -18,11 +18,16 @@ export enum DoughEventType {
   SessionCreated = "session_created",
   SessionResumed = "session_resumed",
 
+  // File changes
+  ChangeStatsUpdate = "change_stats_update",
+
   // Control
   Error = "error",
   Finished = "finished",
   Aborted = "aborted",
 }
+
+import type { ChangeStats } from "./snapshots.ts";
 
 export interface UsageMetadata {
   inputTokens: number;
@@ -84,6 +89,7 @@ export type DoughEvent =
       sessionId: string;
       threadId: string;
     }
+  | { type: DoughEventType.ChangeStatsUpdate; stats: ChangeStats }
   | { type: DoughEventType.Error; message: string; code?: string }
   | {
       type: DoughEventType.Finished;

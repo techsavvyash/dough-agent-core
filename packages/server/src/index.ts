@@ -1,4 +1,5 @@
 import { DoughAgent } from "@dough/core";
+import { FileTracker } from "./file-tracker.ts";
 import { createWSHandler, type WSData } from "./ws-handler.ts";
 
 const PORT = parseInt(process.env.DOUGH_PORT ?? "4200", 10);
@@ -22,6 +23,7 @@ const server = Bun.serve<WSData>({
         data: {
           sessionId: url.searchParams.get("session"),
           session: null,
+          fileTracker: new FileTracker(),
         } satisfies WSData,
       });
       return success

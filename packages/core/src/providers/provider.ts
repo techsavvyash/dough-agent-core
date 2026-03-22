@@ -1,4 +1,4 @@
-import type { DoughEvent } from "@dough/protocol";
+import type { DoughEvent, McpServerMap, McpServerStatus } from "@dough/protocol";
 import type { ThreadMessage } from "@dough/threads";
 
 export interface SendOptions {
@@ -42,4 +42,23 @@ export interface LLMProvider {
    * Clean up provider resources.
    */
   dispose?(): Promise<void>;
+
+  // ── MCP support (optional) ─────────────────────────────────
+
+  /**
+   * Whether this provider supports MCP servers natively.
+   * When true, setMcpServers/getMcpStatus are expected to work.
+   */
+  readonly supportsMcp?: boolean;
+
+  /**
+   * Configure MCP servers for this provider.
+   * The provider adapter maps generic McpServerConfig to its native format.
+   */
+  setMcpServers?(servers: McpServerMap): Promise<void>;
+
+  /**
+   * Get the status of all configured MCP servers.
+   */
+  getMcpStatus?(): Promise<McpServerStatus[]>;
 }

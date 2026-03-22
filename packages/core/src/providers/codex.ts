@@ -1,5 +1,5 @@
 import { DoughEventType } from "@dough/protocol";
-import type { DoughEvent } from "@dough/protocol";
+import type { DoughEvent, McpServerMap, McpServerStatus } from "@dough/protocol";
 import type { ThreadMessage } from "@dough/threads";
 import type { LLMProvider, SendOptions } from "./provider.ts";
 
@@ -16,6 +16,9 @@ import type { LLMProvider, SendOptions } from "./provider.ts";
 export class CodexProvider implements LLMProvider {
   readonly name = "codex";
   readonly maxContextTokens = 200_000;
+  readonly supportsMcp = true;
+
+  private mcpServers: McpServerMap = {};
 
   constructor(
     private options: {
@@ -73,5 +76,23 @@ export class CodexProvider implements LLMProvider {
   }): Promise<string> {
     // TODO: Use codex.startThread() / codex.resumeThread()
     return crypto.randomUUID();
+  }
+
+  // ── MCP support ────────────────────────────────────────────
+
+  async setMcpServers(servers: McpServerMap): Promise<void> {
+    this.mcpServers = { ...servers };
+    // TODO: Map to codex-sdk's native MCP config when wired up.
+    // Codex SDK supports mcpServers in thread options similar to:
+    //   thread.run(input, { mcpServers: { ... } })
+  }
+
+  async getMcpStatus(): Promise<McpServerStatus[]> {
+    return Object.entries(this.mcpServers).map(([name, config]) => ({
+      name,
+      connected: true,
+      transport: config.transport,
+      toolCount: 0,
+    }));
   }
 }

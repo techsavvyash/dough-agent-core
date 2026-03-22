@@ -44,6 +44,7 @@ export class ThreadManager {
     const thread: Thread = {
       id: crypto.randomUUID(),
       sessionId,
+      origin: "root",
       status: "active",
       tokenCount: 0,
       maxTokens: this.config.maxTokens,
@@ -115,6 +116,7 @@ export class ThreadManager {
       id: crypto.randomUUID(),
       sessionId: fromThread.sessionId,
       parentThreadId: fromThread.id,
+      origin: "handoff",
       status: "active",
       tokenCount: 0,
       maxTokens: this.config.maxTokens,
@@ -169,6 +171,7 @@ export class ThreadManager {
       id: crypto.randomUUID(),
       sessionId: originalThread.sessionId,
       parentThreadId: originalThread.id,
+      origin: "fork",
       status: "active",
       tokenCount: 0,
       maxTokens: this.config.maxTokens,
@@ -190,6 +193,53 @@ export class ThreadManager {
     });
 
     return { originalThread, forkedThread };
+  }
+
+  /**
+   * Walk the parent chain from a thread back to the root.
+   * Returns threads ordered newest → oldest.
+   */
+  async getThreadChain(threadId: string): Promise<Thread[]> {
+    const chain: Thread[] = [];
+    let currentId: string | undefined = threadId;
+
+    while (currentId) {
+      const thread = await this.config.store.load(currentId);
+      if (!thread) break;
+      chain.push(thread);
+      currentId = thread.parentThreadId;
+    }
+
+    return chain;
+  }
+
+  /**
+   * Delete all threads for a session.
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    const threads = await this.config.store.list(sessionId);
+    for (const thread of threads) {
+      await this.config.store.delete(thread.id);
+    }
+  }
+
+  /**
+   * Convert a Thread to wire-safe ThreadMeta (strips messages).
+   */
+  static toMeta(thread: Thread): import("@dough/protocol").ThreadMeta {
+    return {
+      id: thread.id,
+      sessionId: thread.sessionId,
+      parentThreadId: thread.parentThreadId,
+      origin: thread.origin,
+      status: thread.status,
+      tokenCount: thread.tokenCount,
+      maxTokens: thread.maxTokens,
+      messageCount: thread.messages.length,
+      summary: thread.summary,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+    };
   }
 
   /**

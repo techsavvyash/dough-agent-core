@@ -3,12 +3,22 @@ import { DoughEventType } from "@dough/protocol";
 import type { DoughEvent, SessionMeta } from "@dough/protocol";
 import type { DoughClient } from "../client.ts";
 
+export interface ToolCallEntry {
+  callId: string;
+  name: string;
+  args: Record<string, unknown>;
+  status: "pending" | "success" | "error";
+  result?: unknown;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   timestamp: string;
   isStreaming?: boolean;
+  thought?: string;
+  toolCalls?: ToolCallEntry[];
 }
 
 export function useSession(client: DoughClient) {
@@ -21,6 +31,30 @@ export function useSession(client: DoughClient) {
   useEffect(() => {
     const unsubEvent = client.onEvent((event: DoughEvent) => {
       switch (event.type) {
+        case DoughEventType.Thought:
+          setIsStreaming(true);
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role === "assistant" && last.isStreaming) {
+              return [
+                ...prev.slice(0, -1),
+                { ...last, thought: (last.thought ?? "") + event.text },
+              ];
+            }
+            return [
+              ...prev,
+              {
+                id: event.streamId,
+                role: "assistant",
+                content: "",
+                timestamp: new Date().toISOString(),
+                isStreaming: true,
+                thought: event.text,
+              },
+            ];
+          });
+          break;
+
         case DoughEventType.ContentDelta:
           setIsStreaming(true);
           setMessages((prev) => {
@@ -58,8 +92,92 @@ export function useSession(client: DoughClient) {
           });
           break;
 
+        case DoughEventType.ToolCallRequest:
+          setMessages((prev) => {
+            // Find the current streaming assistant message or create one
+            const last = prev[prev.length - 1];
+            const entry: ToolCallEntry = {
+              callId: event.callId,
+              name: event.name,
+              args: event.args,
+              status: "pending",
+            };
+            if (last?.role === "assistant" && last.isStreaming) {
+              const toolCalls = [...(last.toolCalls ?? []), entry];
+              return [
+                ...prev.slice(0, -1),
+                { ...last, toolCalls },
+              ];
+            }
+            return [
+              ...prev,
+              {
+                id: event.streamId,
+                role: "assistant",
+                content: "",
+                timestamp: new Date().toISOString(),
+                isStreaming: true,
+                toolCalls: [entry],
+              },
+            ];
+          });
+          break;
+
+        case DoughEventType.ToolCallResponse:
+          setMessages((prev) => {
+            // Find the message with this tool call and update its status
+            for (let i = prev.length - 1; i >= 0; i--) {
+              const msg = prev[i];
+              if (msg.toolCalls) {
+                const idx = msg.toolCalls.findIndex(
+                  (tc) => tc.callId === event.callId
+                );
+                if (idx >= 0) {
+                  const updatedCalls = [...msg.toolCalls];
+                  updatedCalls[idx] = {
+                    ...updatedCalls[idx],
+                    status: event.isError ? "error" : "success",
+                    result: event.result,
+                  };
+                  return [
+                    ...prev.slice(0, i),
+                    { ...msg, toolCalls: updatedCalls },
+                    ...prev.slice(i + 1),
+                  ];
+                }
+              }
+            }
+            return prev;
+          });
+          break;
+
+        case DoughEventType.ContextWindowWarning:
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "system",
+              content: `⚠ Context window at ${Math.round((event.usedTokens / event.maxTokens) * 100)}% — handoff will trigger soon`,
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+          break;
+
         case DoughEventType.Finished:
           setIsStreaming(false);
+          // Mark any remaining pending tool calls as success
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (!msg.toolCalls?.some((tc) => tc.status === "pending"))
+                return msg;
+              return {
+                ...msg,
+                toolCalls: msg.toolCalls!.map((tc) =>
+                  tc.status === "pending" ? { ...tc, status: "success" as const } : tc
+                ),
+              };
+            })
+          );
           break;
 
         case DoughEventType.Error:
@@ -69,6 +187,16 @@ export function useSession(client: DoughClient) {
 
         case DoughEventType.Aborted:
           setIsStreaming(false);
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.isStreaming) {
+              return [
+                ...prev.slice(0, -1),
+                { ...last, isStreaming: false },
+              ];
+            }
+            return prev;
+          });
           break;
 
         case DoughEventType.ThreadHandoff:
@@ -78,6 +206,18 @@ export function useSession(client: DoughClient) {
               id: crypto.randomUUID(),
               role: "system",
               content: `Thread handoff: context transferred to new thread`,
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+          break;
+
+        case DoughEventType.ThreadForked:
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "system",
+              content: `Thread forked: new branch created from current thread`,
               timestamp: new Date().toISOString(),
             },
           ]);
@@ -126,5 +266,32 @@ export function useSession(client: DoughClient) {
     client.abort();
   }, [client]);
 
-  return { messages, isStreaming, session, error, connected, send, abort };
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+    setError(null);
+  }, []);
+
+  const addSystemMessage = useCallback((content: string) => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "system" as const,
+        content,
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+  }, []);
+
+  return {
+    messages,
+    isStreaming,
+    session,
+    error,
+    connected,
+    send,
+    abort,
+    clearMessages,
+    addSystemMessage,
+  };
 }

@@ -49,8 +49,6 @@ export class DoughSession {
 
     this.abortController = new AbortController();
     const threadId = this.activeThreadId!;
-    const thread = await this.threadManager.getThread(threadId);
-    if (!thread) throw new Error(`Active thread ${threadId} not found`);
 
     // Add user message
     const userMessage: ThreadMessage = {
@@ -62,7 +60,11 @@ export class DoughSession {
     };
     await this.threadManager.addMessage(threadId, userMessage);
 
-    // Check if handoff is needed before sending
+    // Re-fetch thread AFTER addMessage to get the updated token count
+    const thread = await this.threadManager.getThread(threadId);
+    if (!thread) throw new Error(`Active thread ${threadId} not found`);
+
+    // Check if handoff is needed with fresh token count
     if (this.threadManager.needsHandoff(thread)) {
       const result = await this.threadManager.handoff(threadId);
       this.activeThreadId = result.toThread.id;
@@ -92,6 +94,7 @@ export class DoughSession {
       currentThread.messages,
       options
     )) {
+      // Check abort before yielding each event
       if (this.abortController.signal.aborted) {
         yield { type: DoughEventType.Aborted };
         return;
@@ -102,6 +105,12 @@ export class DoughSession {
       }
 
       yield event;
+    }
+
+    // Final abort check after stream completes
+    if (this.abortController.signal.aborted) {
+      yield { type: DoughEventType.Aborted };
+      return;
     }
 
     // Store assistant response

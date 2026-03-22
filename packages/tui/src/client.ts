@@ -2,13 +2,23 @@ import type {
   ClientMessage,
   ServerMessage,
   SessionMeta,
+  ThreadMeta,
   DoughEvent,
+  DiffPayload,
+  McpServerConfig,
+  McpServerStatus,
+  SkillStatus,
 } from "@dough/protocol";
 
 type EventHandler = (event: DoughEvent) => void;
 type SessionHandler = (session: SessionMeta) => void;
 type ErrorHandler = (message: string, code?: string) => void;
 type ConnectionHandler = () => void;
+type DiffsHandler = (payload: DiffPayload) => void;
+type ThreadsHandler = (threads: ThreadMeta[]) => void;
+type McpStatusHandler = (servers: McpServerStatus[]) => void;
+type SkillsHandler = (skills: SkillStatus[]) => void;
+type SkillContentHandler = (name: string, instructions: string) => void;
 
 export class DoughClient {
   private ws: WebSocket | null = null;
@@ -17,6 +27,11 @@ export class DoughClient {
   private errorHandlers = new Set<ErrorHandler>();
   private connectHandlers = new Set<ConnectionHandler>();
   private disconnectHandlers = new Set<ConnectionHandler>();
+  private diffsHandlers = new Set<DiffsHandler>();
+  private threadsHandlers = new Set<ThreadsHandler>();
+  private mcpStatusHandlers = new Set<McpStatusHandler>();
+  private skillsHandlers = new Set<SkillsHandler>();
+  private skillContentHandlers = new Set<SkillContentHandler>();
 
   constructor(private serverUrl: string = "ws://localhost:4200/ws") {}
 
@@ -48,6 +63,21 @@ export class DoughClient {
             break;
           case "session_info":
             for (const h of this.sessionHandlers) h(msg.session);
+            break;
+          case "diffs":
+            for (const h of this.diffsHandlers) h(msg.payload);
+            break;
+          case "threads_list":
+            for (const h of this.threadsHandlers) h(msg.threads);
+            break;
+          case "mcp_status":
+            for (const h of this.mcpStatusHandlers) h(msg.servers);
+            break;
+          case "skills_status":
+            for (const h of this.skillsHandlers) h(msg.skills);
+            break;
+          case "skill_content":
+            for (const h of this.skillContentHandlers) h(msg.name, msg.instructions);
             break;
           case "error":
             for (const h of this.errorHandlers) h(msg.message, msg.code);
@@ -88,6 +118,14 @@ export class DoughClient {
     this.sendMessage({ kind: "tool_confirmation", callId, approved });
   }
 
+  getDiffs(): void {
+    this.sendMessage({ kind: "get_diffs" });
+  }
+
+  listThreads(sessionId: string): void {
+    this.sendMessage({ kind: "list_threads", sessionId });
+  }
+
   onEvent(handler: EventHandler): () => void {
     this.eventHandlers.add(handler);
     return () => this.eventHandlers.delete(handler);
@@ -111,6 +149,55 @@ export class DoughClient {
   onDisconnect(handler: ConnectionHandler): () => void {
     this.disconnectHandlers.add(handler);
     return () => this.disconnectHandlers.delete(handler);
+  }
+
+  onDiffs(handler: DiffsHandler): () => void {
+    this.diffsHandlers.add(handler);
+    return () => this.diffsHandlers.delete(handler);
+  }
+
+  onThreads(handler: ThreadsHandler): () => void {
+    this.threadsHandlers.add(handler);
+    return () => this.threadsHandlers.delete(handler);
+  }
+
+  // ── MCP commands ────────────────────────────────────────────
+
+  addMcpServer(name: string, config: McpServerConfig): void {
+    this.sendMessage({ kind: "mcp_add", name, config });
+  }
+
+  removeMcpServer(name: string): void {
+    this.sendMessage({ kind: "mcp_remove", name });
+  }
+
+  listMcpServers(): void {
+    this.sendMessage({ kind: "mcp_list" });
+  }
+
+  onMcpStatus(handler: McpStatusHandler): () => void {
+    this.mcpStatusHandlers.add(handler);
+    return () => this.mcpStatusHandlers.delete(handler);
+  }
+
+  // ── Skills commands ──────────────────────────────────────────
+
+  listSkills(): void {
+    this.sendMessage({ kind: "skills_list" });
+  }
+
+  activateSkill(name: string): void {
+    this.sendMessage({ kind: "skill_activate", name });
+  }
+
+  onSkills(handler: SkillsHandler): () => void {
+    this.skillsHandlers.add(handler);
+    return () => this.skillsHandlers.delete(handler);
+  }
+
+  onSkillContent(handler: SkillContentHandler): () => void {
+    this.skillContentHandlers.add(handler);
+    return () => this.skillContentHandlers.delete(handler);
   }
 
   disconnect(): void {

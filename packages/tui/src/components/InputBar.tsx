@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState, useEffect } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { InputRenderable } from "@opentui/core";
 import { colors, symbols, hrule } from "../theme.ts";
@@ -9,9 +9,26 @@ interface InputBarProps {
   onAbort: () => void;
 }
 
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m > 0) return `${m}:${s.toString().padStart(2, "0")}`;
+  return `${s}s`;
+}
+
 export function InputBar({ onSubmit, isStreaming, onAbort }: InputBarProps) {
   const inputRef = useRef<InputRenderable>(null);
   const { width } = useTerminalDimensions();
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!isStreaming) {
+      setElapsed(0);
+      return;
+    }
+    const id = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(id);
+  }, [isStreaming]);
 
   useKeyboard((key) => {
     if (key.name === "escape" && isStreaming) {
@@ -34,25 +51,20 @@ export function InputBar({ onSubmit, isStreaming, onAbort }: InputBarProps) {
   const rule = hrule(width);
   const prefix = isStreaming ? symbols.thinking : symbols.userPrefix;
   const prefixColor = isStreaming ? colors.warning : colors.primary;
-  const hint = isStreaming ? "Esc to cancel" : "? for shortcuts";
+  const timer = isStreaming && elapsed > 0 ? ` [${formatElapsed(elapsed)}]` : "";
 
   return (
     <box flexDirection="column">
-      <box><text fg={colors.border}>{rule}</text></box>
-      <box flexDirection="row">
-        <box width={3} paddingLeft={1}>
-          <text fg={prefixColor}>{prefix} </text>
-        </box>
+      <box height={1}><text fg={colors.border}>{rule}</text></box>
+      <box height={1} paddingLeft={1}>
         <input
           ref={inputRef}
           focused
-          placeholder={isStreaming ? "Thinking..." : ""}
+          placeholder={isStreaming ? `${prefix} Thinking...${timer} (Esc to cancel)` : `${prefix} Type a message... (? for commands)`}
           onSubmit={handleSubmit}
+          textColor={colors.text}
+          placeholderColor={prefixColor}
         />
-      </box>
-      <box><text fg={colors.border}>{rule}</text></box>
-      <box paddingX={2}>
-        <text fg={colors.textMuted}>{hint}</text>
       </box>
     </box>
   );

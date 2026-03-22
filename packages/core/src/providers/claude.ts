@@ -1,5 +1,10 @@
 import { DoughEventType } from "@dough/protocol";
-import type { DoughEvent, UsageMetadata } from "@dough/protocol";
+import type {
+  DoughEvent,
+  UsageMetadata,
+  McpServerMap,
+  McpServerStatus,
+} from "@dough/protocol";
 import type { ThreadMessage } from "@dough/threads";
 import type { LLMProvider, SendOptions } from "./provider.ts";
 import {
@@ -33,9 +38,12 @@ export interface ClaudeProviderConfig {
 export class ClaudeProvider implements LLMProvider {
   readonly name = "claude";
   readonly maxContextTokens = 200_000;
+  readonly supportsMcp = true;
 
   private config: ClaudeProviderConfig;
   private activeSessionId: string | null = null;
+  /** MCP servers in claude-agent-sdk native format */
+  private mcpServers: Record<string, unknown> = {};
 
   constructor(config: ClaudeProviderConfig = {}) {
     this.config = {
@@ -80,6 +88,11 @@ export class ClaudeProvider implements LLMProvider {
         ? abortControllerFromSignal(options.signal)
         : undefined,
     };
+
+    // Add MCP servers if configured
+    if (Object.keys(this.mcpServers).length > 0) {
+      (queryOptions as Record<string, unknown>).mcpServers = this.mcpServers;
+    }
 
     // Add system prompt if provided
     if (options.systemPrompt ?? this.config.systemPrompt) {
@@ -187,6 +200,55 @@ export class ClaudeProvider implements LLMProvider {
   async dispose(): Promise<void> {
     this.activeSessionId = null;
   }
+
+  // ── MCP adapter ────────────────────────────────────────────
+
+  /**
+   * Map generic McpServerMap to claude-agent-sdk's native format
+   * and store for use in subsequent query() calls.
+   */
+  async setMcpServers(servers: McpServerMap): Promise<void> {
+    const native: Record<string, unknown> = {};
+    for (const [name, config] of Object.entries(servers)) {
+      switch (config.transport) {
+        case "stdio":
+          native[name] = {
+            type: "stdio",
+            command: config.command,
+            args: config.args,
+            env: config.env,
+          };
+          break;
+        case "sse":
+          native[name] = {
+            type: "sse",
+            url: config.url,
+            headers: config.headers,
+          };
+          break;
+        case "http":
+          native[name] = {
+            type: "http",
+            url: config.url,
+            headers: config.headers,
+          };
+          break;
+      }
+    }
+    this.mcpServers = native;
+  }
+
+  async getMcpStatus(): Promise<McpServerStatus[]> {
+    // claude-agent-sdk exposes mcpServerStatus() on Session objects,
+    // but we don't hold a persistent Session ref here (query() is stateless).
+    // Return synthetic status from our stored config.
+    return Object.entries(this.mcpServers).map(([name, config]) => ({
+      name,
+      connected: true,
+      transport: ((config as Record<string, unknown>).type as "stdio" | "sse" | "http") ?? "stdio",
+      toolCount: 0,
+    }));
+  }
 }
 
 /**
@@ -281,6 +343,36 @@ function mapSDKMessageToDoughEvents(
         reason: message.is_error ? "completed" : "completed",
         usage,
       });
+      break;
+    }
+
+    case "user": {
+      // User message with tool results — extract tool_result blocks
+      const content = message.message.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (
+            typeof block === "object" &&
+            block !== null &&
+            "type" in block &&
+            (block as { type: string }).type === "tool_result"
+          ) {
+            const tb = block as {
+              type: "tool_result";
+              tool_use_id: string;
+              content?: unknown;
+              is_error?: boolean;
+            };
+            events.push({
+              type: DoughEventType.ToolCallResponse,
+              callId: tb.tool_use_id,
+              result: tb.content,
+              isError: tb.is_error,
+              streamId,
+            });
+          }
+        }
+      }
       break;
     }
 

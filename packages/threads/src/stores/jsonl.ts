@@ -18,13 +18,10 @@ export class JsonlThreadStore implements ThreadStore {
 
   async save(thread: Thread): Promise<void> {
     const path = this.threadPath(thread.id);
-    const dir = path.substring(0, path.lastIndexOf("/"));
 
     // Ensure directory exists
-    await Bun.write(
-      `${dir}/.keep`,
-      ""
-    ).catch(() => {});
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(this.dir, { recursive: true }).catch(() => {});
 
     const file = Bun.file(path);
     const lines = thread.messages

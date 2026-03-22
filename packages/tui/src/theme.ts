@@ -29,6 +29,17 @@ export const symbols = {
   cursor: "▍",
   dot: "·",
   hrule: "─",
+  // Tool call indicators
+  toolCall: "⚡",
+  toolSuccess: "✓",
+  toolError: "✗",
+  toolPending: "⋯",
+  // Streaming spinners
+  spinnerFrames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as readonly string[],
+  // Thought
+  thought: "💭",
+  // Context warning
+  contextWarn: "⚠",
 } as const;
 
 export function hrule(width: number): string {
