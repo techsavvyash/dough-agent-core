@@ -160,7 +160,10 @@ export class FileTracker {
    */
   private persistFileDiff(filePath: string): void {
     if (!this.sessionId || !this.persistence) {
-      console.warn(`[file-tracker] persistFileDiff skipped — sessionId=${this.sessionId} persistence=${!!this.persistence}`);
+      // Only warn when persistence is configured but sessionId is missing — likely a wiring bug
+      if (this.persistence && !this.sessionId) {
+        console.warn(`[file-tracker] persistFileDiff skipped — persistence is set but setSessionId() was never called`);
+      }
       return;
     }
     const stat = this.statsCache.get(filePath);
