@@ -18,6 +18,15 @@ export interface WSData {
   isProcessingQueue: boolean;
 }
 
+/**
+ * Derive a short display title from a user prompt.
+ * Takes the first non-empty line, capped at 60 chars.
+ */
+function deriveTitle(prompt: string): string {
+  const firstLine = prompt.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? prompt.trim();
+  return firstLine.length > 60 ? firstLine.slice(0, 57) + "…" : firstLine;
+}
+
 /** Tool names that write to files — we intercept these for diffing */
 const FILE_WRITE_TOOLS = new Set([
   // claude-agent-sdk tool names (capitalized)
@@ -125,6 +134,14 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
       ws.send(JSON.stringify(err));
     } finally {
       unsubStats();
+
+      if (session.currentThreadId) {
+        // Set a short display title from the first user prompt if not already set.
+        // No-op when a handoff summary already exists.
+        await agent.getThreadManager()
+          .setThreadTitle(session.currentThreadId, deriveTitle(prompt));
+      }
+
       if (store && session.currentThreadId) {
         const rec = store.loadSession(session.id);
         if (rec) {

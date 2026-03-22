@@ -196,6 +196,19 @@ export class ThreadManager {
   }
 
   /**
+   * Set a short display title for a thread, derived from the first user prompt.
+   * No-op if the thread already has a summary (e.g. from an LLM handoff).
+   * This keeps the per-thread label lightweight — no LLM call needed.
+   */
+  async setThreadTitle(threadId: string, title: string): Promise<void> {
+    const thread = await this.config.store.load(threadId);
+    if (!thread || thread.summary) return; // never overwrite an existing summary
+    thread.summary = title;
+    thread.updatedAt = new Date().toISOString();
+    await this.config.store.save(thread);
+  }
+
+  /**
    * Walk the parent chain from a thread back to the root.
    * Returns threads ordered newest → oldest.
    */
