@@ -19,6 +19,7 @@ export class SqliteThreadStore implements ThreadStore {
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
         parent_thread_id TEXT,
+        origin TEXT NOT NULL DEFAULT 'root',
         status TEXT NOT NULL DEFAULT 'active',
         token_count INTEGER NOT NULL DEFAULT 0,
         max_tokens INTEGER NOT NULL DEFAULT 200000,
@@ -28,19 +29,28 @@ export class SqliteThreadStore implements ThreadStore {
         updated_at TEXT NOT NULL
       )
     `);
-    this.db.run(`
-      CREATE INDEX IF NOT EXISTS idx_threads_session_id ON threads(session_id)
-    `);
+    this.db.run(
+      `CREATE INDEX IF NOT EXISTS idx_threads_session_id ON threads(session_id)`
+    );
+    // Add origin column to existing databases that predate this migration
+    try {
+      this.db.run(`ALTER TABLE threads ADD COLUMN origin TEXT NOT NULL DEFAULT 'root'`);
+    } catch {
+      // Column already exists — safe to ignore
+    }
   }
 
   async save(thread: Thread): Promise<void> {
     this.db.run(
-      `INSERT OR REPLACE INTO threads (id, session_id, parent_thread_id, status, token_count, max_tokens, summary, messages, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO threads
+         (id, session_id, parent_thread_id, origin, status, token_count,
+          max_tokens, summary, messages, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         thread.id,
         thread.sessionId,
         thread.parentThreadId ?? null,
+        thread.origin,
         thread.status,
         thread.tokenCount,
         thread.maxTokens,
@@ -74,11 +84,12 @@ export class SqliteThreadStore implements ThreadStore {
     return {
       id: row.id as string,
       sessionId: row.session_id as string,
-      parentThreadId: (row.parent_thread_id as string) ?? undefined,
+      parentThreadId: (row.parent_thread_id as string | null) ?? undefined,
+      origin: (row.origin as Thread["origin"]) ?? "root",
       status: row.status as Thread["status"],
       tokenCount: row.token_count as number,
       maxTokens: row.max_tokens as number,
-      summary: (row.summary as string) ?? undefined,
+      summary: (row.summary as string | null) ?? undefined,
       messages: JSON.parse(row.messages as string) as ThreadMessage[],
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,

@@ -42,6 +42,14 @@ export class DoughSession {
     return thread.id;
   }
 
+  /**
+   * Resume from an existing thread instead of creating a new one.
+   * Used when reconnecting to a previously-saved session.
+   */
+  resumeThread(threadId: string): void {
+    this.activeThreadId = threadId;
+  }
+
   async *send(prompt: string): AsyncGenerator<DoughEvent> {
     if (!this.activeThreadId) {
       await this.initialize();

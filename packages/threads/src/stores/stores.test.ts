@@ -11,6 +11,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: crypto.randomUUID(),
     sessionId: "test-session",
+    origin: "root",
     status: "active",
     tokenCount: 0,
     maxTokens: 200_000,
