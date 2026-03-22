@@ -1,4 +1,4 @@
-import type { Thread, ThreadStore } from "../types.ts";
+import type { Thread, ThreadStore, SessionRecord, ThreadSummary } from "../types.ts";
 
 /**
  * In-memory thread store. Simple default for development and testing.
@@ -6,6 +6,7 @@ import type { Thread, ThreadStore } from "../types.ts";
  */
 export class MemoryThreadStore implements ThreadStore {
   private threads = new Map<string, Thread>();
+  private sessions = new Map<string, SessionRecord>();
 
   async save(thread: Thread): Promise<void> {
     this.threads.set(thread.id, structuredClone(thread));
@@ -31,5 +32,30 @@ export class MemoryThreadStore implements ThreadStore {
 
   async delete(threadId: string): Promise<void> {
     this.threads.delete(threadId);
+  }
+
+  // ── Session operations ──────────────────────────────────────
+
+  async saveSession(record: SessionRecord): Promise<void> {
+    this.sessions.set(record.id, structuredClone(record));
+  }
+
+  async loadSession(sessionId: string): Promise<SessionRecord | null> {
+    const rec = this.sessions.get(sessionId);
+    return rec ? structuredClone(rec) : null;
+  }
+
+  async listSessions(): Promise<SessionRecord[]> {
+    return [...this.sessions.values()]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async listAll(): Promise<ThreadSummary[]> {
+    return [...this.threads.values()]
+      .map((t) => {
+        const { messages, ...meta } = t;
+        return { ...meta, messageCount: messages.length };
+      })
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 }

@@ -2,7 +2,8 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { MemoryThreadStore } from "./memory.ts";
 import { SqliteThreadStore } from "./sqlite.ts";
 import { JsonlThreadStore } from "./jsonl.ts";
-import type { Thread, ThreadStore } from "../types.ts";
+import { HybridThreadStore } from "./hybrid.ts";
+import type { Thread, ThreadStore, SessionRecord } from "../types.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -151,6 +152,97 @@ function storeTests(name: string, createStore: () => Promise<{ store: ThreadStor
         edited: true,
       });
     });
+
+    // ── Session tests ───────────────────────────────────────────
+
+    test("saveSession and loadSession", async () => {
+      const rec: SessionRecord = {
+        id: "sess-1",
+        activeThreadId: "t-1",
+        provider: "claude",
+        model: "sonnet",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await store.saveSession(rec);
+      const loaded = await store.loadSession("sess-1");
+      expect(loaded).not.toBeNull();
+      expect(loaded!.id).toBe("sess-1");
+      expect(loaded!.activeThreadId).toBe("t-1");
+      expect(loaded!.provider).toBe("claude");
+      expect(loaded!.model).toBe("sonnet");
+    });
+
+    test("loadSession returns null for unknown id", async () => {
+      const loaded = await store.loadSession("nonexistent");
+      expect(loaded).toBeNull();
+    });
+
+    test("saveSession upserts", async () => {
+      const now = new Date().toISOString();
+      await store.saveSession({
+        id: "sess-1",
+        activeThreadId: "t-1",
+        provider: "claude",
+        createdAt: now,
+        updatedAt: now,
+      });
+      await store.saveSession({
+        id: "sess-1",
+        activeThreadId: "t-2",
+        provider: "claude",
+        providerSessionId: "sdk-123",
+        createdAt: now,
+        updatedAt: new Date().toISOString(),
+      });
+      const loaded = await store.loadSession("sess-1");
+      expect(loaded!.activeThreadId).toBe("t-2");
+      expect(loaded!.providerSessionId).toBe("sdk-123");
+    });
+
+    test("listSessions returns all, newest first", async () => {
+      await store.saveSession({
+        id: "sess-old",
+        activeThreadId: "t-1",
+        provider: "claude",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      });
+      await store.saveSession({
+        id: "sess-new",
+        activeThreadId: "t-2",
+        provider: "codex",
+        createdAt: "2026-03-01T00:00:00Z",
+        updatedAt: "2026-03-01T00:00:00Z",
+      });
+      const sessions = await store.listSessions();
+      expect(sessions).toHaveLength(2);
+      expect(sessions[0].id).toBe("sess-new");
+      expect(sessions[1].id).toBe("sess-old");
+    });
+
+    test("listAll returns thread metadata with messageCount", async () => {
+      await store.save(
+        makeThread({
+          sessionId: "s1",
+          messages: [
+            { id: "m1", role: "user", content: "a", tokenEstimate: 1, timestamp: new Date().toISOString() },
+            { id: "m2", role: "assistant", content: "b", tokenEstimate: 1, timestamp: new Date().toISOString() },
+          ],
+          tokenCount: 2,
+        })
+      );
+      await store.save(makeThread({ sessionId: "s2" }));
+
+      const all = await store.listAll();
+      expect(all).toHaveLength(2);
+      const withMessages = all.find((t) => t.sessionId === "s1");
+      const empty = all.find((t) => t.sessionId === "s2");
+      expect(withMessages!.messageCount).toBe(2);
+      expect(empty!.messageCount).toBe(0);
+      // Should not have a messages property
+      expect("messages" in withMessages!).toBe(false);
+    });
   });
 }
 
@@ -180,6 +272,21 @@ storeTests("JsonlThreadStore", async () => {
   return {
     store,
     cleanup: async () => {
+      await rm(dir, { recursive: true, force: true });
+    },
+  };
+});
+
+storeTests("HybridThreadStore", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dough-hybrid-test-"));
+  const store = new HybridThreadStore({
+    dbPath: join(dir, "test.db"),
+    threadsDir: join(dir, "threads"),
+  });
+  return {
+    store,
+    cleanup: async () => {
+      store.close();
       await rm(dir, { recursive: true, force: true });
     },
   };

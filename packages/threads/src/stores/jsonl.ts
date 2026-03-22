@@ -1,9 +1,10 @@
-import type { Thread, ThreadStore } from "../types.ts";
+import type { Thread, ThreadStore, SessionRecord, ThreadSummary } from "../types.ts";
 
 /**
  * JSONL file-backed thread store.
  * Compatible with claude-agent-sdk and codex-sdk session file patterns.
  * Each thread is stored as a separate .jsonl file in the configured directory.
+ * Sessions are stored in a _sessions.json sidecar file.
  */
 export class JsonlThreadStore implements ThreadStore {
   private dir: string;
@@ -14,6 +15,10 @@ export class JsonlThreadStore implements ThreadStore {
 
   private threadPath(threadId: string): string {
     return `${this.dir}/${threadId}.jsonl`;
+  }
+
+  private get sessionsPath(): string {
+    return `${this.dir}/_sessions.json`;
   }
 
   async save(thread: Thread): Promise<void> {
@@ -99,5 +104,60 @@ export class JsonlThreadStore implements ThreadStore {
       const { unlink } = await import("node:fs/promises");
       await unlink(this.threadPath(threadId)).catch(() => {});
     }
+  }
+
+  // ── Session operations ──────────────────────────────────────
+
+  private async readSessions(): Promise<SessionRecord[]> {
+    const file = Bun.file(this.sessionsPath);
+    if (!(await file.exists())) return [];
+    try {
+      return JSON.parse(await file.text()) as SessionRecord[];
+    } catch {
+      return [];
+    }
+  }
+
+  private async writeSessions(sessions: SessionRecord[]): Promise<void> {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(this.dir, { recursive: true }).catch(() => {});
+    await Bun.write(this.sessionsPath, JSON.stringify(sessions, null, 2));
+  }
+
+  async saveSession(record: SessionRecord): Promise<void> {
+    const sessions = await this.readSessions();
+    const idx = sessions.findIndex((s) => s.id === record.id);
+    if (idx >= 0) {
+      sessions[idx] = record;
+    } else {
+      sessions.push(record);
+    }
+    await this.writeSessions(sessions);
+  }
+
+  async loadSession(sessionId: string): Promise<SessionRecord | null> {
+    const sessions = await this.readSessions();
+    return sessions.find((s) => s.id === sessionId) ?? null;
+  }
+
+  async listSessions(): Promise<SessionRecord[]> {
+    const sessions = await this.readSessions();
+    return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async listAll(): Promise<ThreadSummary[]> {
+    const glob = new Bun.Glob("*.jsonl");
+    const results: ThreadSummary[] = [];
+
+    for await (const path of glob.scan(this.dir)) {
+      const threadId = path.replace(".jsonl", "");
+      const thread = await this.load(threadId);
+      if (thread) {
+        const { messages, ...meta } = thread;
+        results.push({ ...meta, messageCount: messages.length });
+      }
+    }
+
+    return results.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 }

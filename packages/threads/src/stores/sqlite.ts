@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import type { Thread, ThreadMessage, ThreadStore } from "../types.ts";
+import type { Thread, ThreadMessage, ThreadStore, SessionRecord, ThreadSummary } from "../types.ts";
 
 /**
  * SQLite-backed thread store using bun:sqlite.
@@ -37,6 +37,24 @@ export class SqliteThreadStore implements ThreadStore {
       this.db.run(`ALTER TABLE threads ADD COLUMN origin TEXT NOT NULL DEFAULT 'root'`);
     } catch {
       // Column already exists — safe to ignore
+    }
+
+    // Sessions table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id                  TEXT PRIMARY KEY,
+        active_thread_id    TEXT NOT NULL,
+        provider            TEXT NOT NULL DEFAULT 'claude',
+        model               TEXT,
+        provider_session_id TEXT,
+        created_at          TEXT NOT NULL,
+        updated_at          TEXT NOT NULL
+      )
+    `);
+    try {
+      this.db.run(`ALTER TABLE sessions ADD COLUMN provider_session_id TEXT`);
+    } catch {
+      // Column already exists
     }
   }
 
@@ -94,6 +112,66 @@ export class SqliteThreadStore implements ThreadStore {
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     };
+  }
+
+  // ── Session operations ──────────────────────────────────────
+
+  async saveSession(record: SessionRecord): Promise<void> {
+    this.db.run(
+      `INSERT OR REPLACE INTO sessions
+         (id, active_thread_id, provider, model, provider_session_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        record.id,
+        record.activeThreadId,
+        record.provider,
+        record.model ?? null,
+        record.providerSessionId ?? null,
+        record.createdAt,
+        record.updatedAt,
+      ]
+    );
+  }
+
+  async loadSession(sessionId: string): Promise<SessionRecord | null> {
+    const row = this.db
+      .query("SELECT * FROM sessions WHERE id = ?")
+      .get(sessionId) as Record<string, unknown> | null;
+    if (!row) return null;
+    return {
+      id: row.id as string,
+      activeThreadId: row.active_thread_id as string,
+      provider: row.provider as string,
+      model: (row.model as string | null) ?? undefined,
+      providerSessionId: (row.provider_session_id as string | null) ?? undefined,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+    };
+  }
+
+  async listSessions(): Promise<SessionRecord[]> {
+    const rows = this.db
+      .query("SELECT * FROM sessions ORDER BY updated_at DESC")
+      .all() as Record<string, unknown>[];
+    return rows.map((row) => ({
+      id: row.id as string,
+      activeThreadId: row.active_thread_id as string,
+      provider: row.provider as string,
+      model: (row.model as string | null) ?? undefined,
+      providerSessionId: (row.provider_session_id as string | null) ?? undefined,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+    }));
+  }
+
+  async listAll(): Promise<ThreadSummary[]> {
+    const rows = this.db
+      .query("SELECT * FROM threads ORDER BY updated_at DESC")
+      .all() as Record<string, unknown>[];
+    return rows.map((row) => {
+      const { messages, ...rest } = this.rowToThread(row);
+      return { ...rest, messageCount: messages.length };
+    });
   }
 
   close(): void {
