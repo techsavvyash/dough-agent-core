@@ -36,12 +36,17 @@ export function ThreadViewer({
   onSwitch,
 }: ThreadViewerProps) {
   const { width } = useTerminalDimensions();
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const [showDetail, setShowDetail] = useState(false);
   const [switching, setSwitching] = useState<string | null>(null);
 
   // Build flat grouped list — session headers + thread nodes
   const items = buildGroupedList(threads);
+
+  // Start selection on the first actual thread row (index 0 is always a session header)
+  const [selectedIndex, setSelectedIndex] = useState(() => {
+    const first = items.findIndex((it) => it.kind === "thread");
+    return first >= 0 ? first : 0;
+  });
 
   // Only thread items are navigable
   const navigable = items.filter((it): it is Extract<ListItem, { kind: "thread" }> => it.kind === "thread");

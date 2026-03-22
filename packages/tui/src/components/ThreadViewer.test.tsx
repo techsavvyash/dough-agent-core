@@ -48,11 +48,12 @@ describe("ThreadViewer", () => {
     await renderOnce();
     const frame = captureCharFrame();
 
-    expect(frame).toContain("Threads");
-    expect(frame).toContain("1 total");
+    expect(frame).toContain("All Threads");
+    // Header shows "N threads across M session(s)"
+    expect(frame).toContain("1 threads");
     expect(frame).toContain("aaaa-bbb");
     expect(frame).toContain("(active)");
-    expect(frame).toContain("5 msgs");
+    expect(frame).toContain("5msg");
     // Root origin indicator
     expect(frame).toContain("○");
   });
@@ -86,7 +87,8 @@ describe("ThreadViewer", () => {
     await renderOnce();
     const frame = captureCharFrame();
 
-    expect(frame).toContain("2 total");
+    // Header shows "N threads across M session(s)"
+    expect(frame).toContain("2 threads");
     // Root thread
     expect(frame).toContain("○");
     // Handoff indicator

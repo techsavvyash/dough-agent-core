@@ -5,7 +5,8 @@
   "main": "src/index.tsx",
   "types": "src/index.tsx",
   "scripts": {
-    "start": "bun run src/index.tsx"
+    "start": "bun run src/index.tsx",
+    "test": "bun test"
   },
   "dependencies": {
     "@dough/protocol": "workspace:*",
