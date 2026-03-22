@@ -1,8 +1,16 @@
 import { test, expect, describe } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import { createSpy } from "@opentui/core/testing";
+import type { ParsedKey } from "@opentui/core";
 import { act } from "react";
 import { CommandPalette, COMMANDS } from "./CommandPalette.tsx";
+
+/** Synthetic escape key — bypasses stdin parser debounce for reliable CI testing */
+const ESCAPE_KEY: ParsedKey = {
+  name: "escape", sequence: "\x1b", ctrl: false, meta: false,
+  shift: false, option: false, number: false, raw: "\x1b",
+  eventType: "press", source: "raw",
+};
 
 describe("CommandPalette", () => {
   test("renders all commands", async () => {
@@ -64,16 +72,15 @@ describe("CommandPalette", () => {
     const onSelect = createSpy();
     const onClose = createSpy();
 
-    const { mockInput, renderOnce } = await testRender(
+    const { renderer, renderOnce } = await testRender(
       <CommandPalette commands={COMMANDS} onSelect={onSelect} onClose={onClose} />,
       { width: 80, height: 20 }
     );
     await renderOnce();
 
-    await act(async () => {
-      mockInput.pressEscape();
-      await new Promise(r => setTimeout(r, 500));
-    });
+    // Directly inject a pre-parsed escape key to avoid stdin-parser debounce
+    // timing differences between macOS and Linux CI runners.
+    renderer.keyInput.processParsedKey(ESCAPE_KEY);
     await renderOnce();
 
     expect(onClose.callCount()).toBe(1);

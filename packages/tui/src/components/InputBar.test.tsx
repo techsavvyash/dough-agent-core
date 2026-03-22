@@ -1,8 +1,16 @@
 import { test, expect, describe } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import { createSpy } from "@opentui/core/testing";
+import type { ParsedKey } from "@opentui/core";
 import { act } from "react";
 import { InputBar } from "./InputBar.tsx";
+
+/** Synthetic escape key — bypasses stdin-parser debounce for reliable CI testing */
+const ESCAPE_KEY: ParsedKey = {
+  name: "escape", sequence: "\x1b", ctrl: false, meta: false,
+  shift: false, option: false, number: false, raw: "\x1b",
+  eventType: "press", source: "raw",
+};
 
 describe("InputBar", () => {
   test("shows placeholder when idle", async () => {
@@ -143,16 +151,15 @@ describe("InputBar", () => {
 
   test("escape calls onAbort while streaming", async () => {
     const onAbort = createSpy();
-    const { mockInput, renderOnce } = await testRender(
+    const { renderer, renderOnce } = await testRender(
       <InputBar onSubmit={createSpy()} isStreaming={true} onAbort={onAbort} />,
       { width: 80, height: 4 }
     );
     await renderOnce();
 
-    await act(async () => {
-      mockInput.pressEscape();
-      await new Promise(r => setTimeout(r, 500));
-    });
+    // Directly inject a pre-parsed escape key to avoid stdin-parser debounce
+    // timing differences between macOS and Linux CI runners.
+    renderer.keyInput.processParsedKey(ESCAPE_KEY);
     await renderOnce();
 
     expect(onAbort.callCount()).toBe(1);
