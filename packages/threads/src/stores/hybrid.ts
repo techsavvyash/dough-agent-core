@@ -15,6 +15,8 @@ export interface SessionRecord {
   activeThreadId: string;
   provider: string;
   model?: string;
+  /** Provider-native session ID (e.g. claude-agent-sdk's session_id). */
+  providerSessionId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -70,14 +72,21 @@ export class HybridThreadStore implements ThreadStore {
     // Sessions table — persists session metadata across server restarts
     this.db.run(`
       CREATE TABLE IF NOT EXISTS sessions (
-        id               TEXT PRIMARY KEY,
-        active_thread_id TEXT NOT NULL,
-        provider         TEXT NOT NULL DEFAULT 'claude',
-        model            TEXT,
-        created_at       TEXT NOT NULL,
-        updated_at       TEXT NOT NULL
+        id                  TEXT PRIMARY KEY,
+        active_thread_id    TEXT NOT NULL,
+        provider            TEXT NOT NULL DEFAULT 'claude',
+        model               TEXT,
+        provider_session_id TEXT,
+        created_at          TEXT NOT NULL,
+        updated_at          TEXT NOT NULL
       )
     `);
+    // Additive migration: add provider_session_id to existing DBs
+    try {
+      this.db.run(`ALTER TABLE sessions ADD COLUMN provider_session_id TEXT`);
+    } catch {
+      // Column already exists — safe to ignore
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -230,13 +239,14 @@ export class HybridThreadStore implements ThreadStore {
   saveSession(record: SessionRecord): void {
     this.db.run(
       `INSERT OR REPLACE INTO sessions
-         (id, active_thread_id, provider, model, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+         (id, active_thread_id, provider, model, provider_session_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         record.id,
         record.activeThreadId,
         record.provider,
         record.model ?? null,
+        record.providerSessionId ?? null,
         record.createdAt,
         record.updatedAt,
       ]
@@ -254,6 +264,7 @@ export class HybridThreadStore implements ThreadStore {
       activeThreadId: row.active_thread_id as string,
       provider: row.provider as string,
       model: (row.model as string | null) ?? undefined,
+      providerSessionId: (row.provider_session_id as string | null) ?? undefined,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     };
@@ -269,6 +280,7 @@ export class HybridThreadStore implements ThreadStore {
       activeThreadId: row.active_thread_id as string,
       provider: row.provider as string,
       model: (row.model as string | null) ?? undefined,
+      providerSessionId: (row.provider_session_id as string | null) ?? undefined,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     }));

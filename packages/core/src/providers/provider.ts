@@ -30,6 +30,12 @@ export interface LLMProvider {
   estimateTokens(messages: ThreadMessage[]): number | Promise<number>;
 
   /**
+   * The provider-native session ID, if any. Used to persist and restore
+   * the provider's own session state (e.g. claude-agent-sdk session_id).
+   */
+  readonly sessionId?: string | null;
+
+  /**
    * Create or resume a provider-native session.
    * Returns a session ID that can be used with the provider's own persistence.
    */

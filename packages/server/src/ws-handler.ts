@@ -145,9 +145,14 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
       if (store && session.currentThreadId) {
         const rec = store.loadSession(session.id);
         if (rec) {
+          // Also persist the provider-native session ID so it can be
+          // restored after a server restart (gives the SDK full history).
+          const providerSessionId =
+            agent.getProvider().sessionId ?? rec.providerSessionId;
           store.saveSession({
             ...rec,
             activeThreadId: session.currentThreadId,
+            providerSessionId,
             updatedAt: new Date().toISOString(),
           });
         }
@@ -302,7 +307,11 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
           if (!resumed && store) {
             const record = store.loadSession(msg.sessionId);
             if (record) {
-              resumed = await agent.resumeSession(record.id, record.activeThreadId);
+              resumed = await agent.resumeSession(
+                record.id,
+                record.activeThreadId,
+                record.providerSessionId
+              );
               sessions.set(resumed.id, resumed);
               console.log(`[ws] reconstructed session ${record.id} from db`);
             }
@@ -356,7 +365,11 @@ export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
             if (!found && store) {
               const record = store.loadSession(msg.sessionId);
               if (record) {
-                found = await agent.resumeSession(record.id, record.activeThreadId);
+                found = await agent.resumeSession(
+                  record.id,
+                  record.activeThreadId,
+                  record.providerSessionId
+                );
                 sessions.set(found.id, found);
                 console.log(`[ws] reconstructed session ${record.id} for switch_thread`);
               } else {

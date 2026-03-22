@@ -165,9 +165,24 @@ export class DoughAgent {
    * Reconstruct a previously-saved session without creating a new thread.
    * Used when resuming after a server restart — the thread history is still
    * in the persistent store; we just need to point the session at it.
+   *
+   * @param providerSessionId  Optional provider-native session ID (e.g. the
+   *   claude-agent-sdk session_id). When supplied, the provider is told to
+   *   resume from that SDK session so it has full conversation history.
    */
-  async resumeSession(sessionId: string, activeThreadId: string): Promise<DoughSession> {
+  async resumeSession(
+    sessionId: string,
+    activeThreadId: string,
+    providerSessionId?: string
+  ): Promise<DoughSession> {
     const systemPrompt = await this.resolveSystemPrompt();
+
+    // Restore the provider-native session ID so the next query() call
+    // passes `resume: <id>` and the SDK reloads the full conversation.
+    if (providerSessionId && this.provider.createSession) {
+      await this.provider.createSession({ sessionId: providerSessionId });
+    }
+
     const session = new DoughSession(sessionId, {
       provider: this.provider,
       threadManager: this.threadManager,
