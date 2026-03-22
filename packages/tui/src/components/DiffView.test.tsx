@@ -142,7 +142,8 @@ describe("DiffView", () => {
 
     // Second file diff should now be visible in the diff panel
     expect(frame).toContain("src/utils.ts");
-    expect(frame).toContain("+export function add");
+    // showLineNumbers=true prefixes lines with "N + content"; match without leading "+"
+    expect(frame).toContain("export function add");
   });
 
   test("escape closes the diff view", async () => {
@@ -182,9 +183,92 @@ describe("DiffView", () => {
     await renderOnce();
     const frame = captureCharFrame();
 
-    // Selection indicator on first file
-    expect(frame).toContain("❯");
-    // First file's diff content shown
-    expect(frame).toContain("-const old = true");
+    // Selection indicator on first file (sidebar uses ▶ as the cursor glyph)
+    expect(frame).toContain("▶");
+    // First file's diff content shown (showLineNumbers=true adds "N - content" prefix)
+    expect(frame).toContain("const old = true");
+  });
+
+  // ── Responsiveness ──────────────────────────────────────────────────────────
+
+  test("word-wrap: long diff lines wrap and remain fully visible in a narrow terminal", async () => {
+    // Build a payload with a diff line intentionally wider than the diff panel.
+    // At width=70: FILE_LIST_W = min(34, floor(70 * 0.22)) = 15
+    // Diff panel ≈ 70 - 15 (sidebar) - 1 (border) - 5 (line-number gutter) ≈ 49 cols.
+    // The added line below is 80+ characters — it must wrap to stay readable.
+    const longLine = "+const " + "a".repeat(30) + " = " + "b".repeat(30) + ";";
+    const wrapPayload: DiffPayload = {
+      sessionId: "s1",
+      stats: { filesChanged: 1, totalAdded: 1, totalRemoved: 0, files: [
+        { filePath: "src/long.ts", linesAdded: 1, linesRemoved: 0, status: "modified" },
+      ]},
+      diffs: [{
+        filePath: "src/long.ts",
+        status: "modified",
+        linesAdded: 1,
+        linesRemoved: 0,
+        language: "typescript",
+        unifiedDiff: [
+          "--- src/long.ts\toriginal",
+          "+++ src/long.ts\tmodified",
+          "@@ -1,1 +1,2 @@",
+          " export {};",
+          longLine,
+        ].join("\n"),
+      }],
+    };
+
+    const { captureCharFrame, renderOnce } = await testRender(
+      <DiffView payload={wrapPayload} onClose={createSpy()} />,
+      { width: 70, height: 35 }
+    );
+    await renderOnce();
+    const frame = captureCharFrame();
+
+    // The tail segment of the long line must appear somewhere in the frame.
+    // If wrapping were off, anything past ~49 chars would be clipped and "bbb...;" would never show.
+    const tail = "b".repeat(10); // unambiguous suffix from the 30-b run
+    expect(frame).toContain(tail);
+  });
+
+  test("pressing b hides the file list sidebar", async () => {
+    const { captureCharFrame, mockInput, renderOnce } = await testRender(
+      <DiffView payload={samplePayload} onClose={createSpy()} />,
+      { width: 120, height: 30 }
+    );
+    await renderOnce();
+
+    // Sidebar visible initially — hint says "hide files"
+    expect(captureCharFrame()).toContain("hide files");
+
+    // Hide the sidebar
+    act(() => { mockInput.pressKey("b"); });
+    await renderOnce();
+    const frame = captureCharFrame();
+
+    // Hint flips to "show files"
+    expect(frame).toContain("show files");
+    // utils.ts only appears in the sidebar (index.ts is the selected file shown in diff panel header).
+    // With the sidebar hidden, utils.ts must not appear anywhere in the frame.
+    expect(frame).not.toContain("utils.ts");
+  });
+
+  test("pressing b twice restores the file list sidebar", async () => {
+    const { captureCharFrame, mockInput, renderOnce } = await testRender(
+      <DiffView payload={samplePayload} onClose={createSpy()} />,
+      { width: 120, height: 30 }
+    );
+    await renderOnce();
+
+    // Hide then show
+    act(() => { mockInput.pressKey("b"); });
+    await renderOnce();
+    act(() => { mockInput.pressKey("b"); });
+    await renderOnce();
+    const frame = captureCharFrame();
+
+    // Hint back to "hide files" and sidebar entries visible again
+    expect(frame).toContain("hide files");
+    expect(frame).toContain("index.ts");
   });
 });
