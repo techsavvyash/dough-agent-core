@@ -1,13 +1,18 @@
 import { DoughEventType } from "@dough/protocol";
 import type { DoughEvent } from "@dough/protocol";
 import type { ThreadManager, ThreadMessage } from "@dough/threads";
-import type { LLMProvider, SendOptions } from "./providers/provider.ts";
+import type { LLMProvider, SendOptions, ToolMiddleware } from "./providers/provider.ts";
 
 export interface DoughSessionConfig {
   provider: LLMProvider;
   threadManager: ThreadManager;
   systemPrompt?: string;
   model?: string;
+  /**
+   * Provider-agnostic tool middleware applied before every tool execution.
+   * Configured once on DoughAgent and propagated to all sessions automatically.
+   */
+  toolMiddleware?: ToolMiddleware[];
 }
 
 /**
@@ -22,6 +27,7 @@ export class DoughSession {
   private threadManager: ThreadManager;
   private systemPrompt?: string;
   private model?: string;
+  private toolMiddleware: ToolMiddleware[];
   private abortController: AbortController | null = null;
 
   constructor(id: string, config: DoughSessionConfig) {
@@ -30,6 +36,7 @@ export class DoughSession {
     this.threadManager = config.threadManager;
     this.systemPrompt = config.systemPrompt;
     this.model = config.model;
+    this.toolMiddleware = config.toolMiddleware ?? [];
   }
 
   get currentThreadId(): string | null {
@@ -95,6 +102,7 @@ export class DoughSession {
       model: this.model,
       systemPrompt: this.systemPrompt,
       signal: this.abortController.signal,
+      toolMiddleware: this.toolMiddleware.length > 0 ? this.toolMiddleware : undefined,
     };
 
     let fullResponse = "";

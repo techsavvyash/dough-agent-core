@@ -13,7 +13,12 @@ import {
   forkSession,
   type SDKMessage,
   type Options,
+  type HookCallbackMatcher,
+  type HookEvent,
+  type HookInput,
+  type PreToolUseHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { ToolMiddleware } from "./provider.ts";
 
 export interface ClaudeProviderConfig {
   model?: string;
@@ -88,6 +93,12 @@ export class ClaudeProvider implements LLMProvider {
         ? abortControllerFromSignal(options.signal)
         : undefined,
     };
+
+    // Translate provider-agnostic ToolMiddleware into SDK-native PreToolUse hooks.
+    // This adapter is Claude-specific; other providers implement their own adapter.
+    if (options.toolMiddleware && options.toolMiddleware.length > 0) {
+      queryOptions.hooks = toolMiddlewareToHooks(options.toolMiddleware);
+    }
 
     // Add MCP servers if configured
     if (Object.keys(this.mcpServers).length > 0) {
@@ -291,9 +302,12 @@ function mapSDKMessageToDoughEvents(
     case "assistant": {
       // When streaming is enabled and we already got deltas, skip duplicate text
       if (!skipAssistantText) {
-        const textBlocks = message.message.content.filter(
+        // Cast to unknown[] first to avoid SDK type conflicts when @anthropic-ai/sdk
+        // is present in the dependency tree (its BetaContentBlock union is narrower).
+        const contentBlocks = message.message.content as unknown[];
+        const textBlocks = contentBlocks.filter(
           (block): block is { type: "text"; text: string } =>
-            block.type === "text"
+            typeof block === "object" && block !== null && (block as { type: string }).type === "text"
         );
         const text = textBlocks.map((b) => b.text).join("");
         if (text) {
@@ -306,9 +320,9 @@ function mapSDKMessageToDoughEvents(
       }
 
       // Always extract tool use blocks (not duplicated by stream events)
-      const toolUseBlocks = message.message.content.filter(
+      const toolUseBlocks = (message.message.content as unknown[]).filter(
         (block): block is { type: "tool_use"; id: string; name: string; input: Record<string, unknown> } =>
-          block.type === "tool_use"
+          typeof block === "object" && block !== null && (block as { type: string }).type === "tool_use"
       );
       for (const tool of toolUseBlocks) {
         events.push({
@@ -413,6 +427,52 @@ function mapSDKMessageToDoughEvents(
   }
 
   return events;
+}
+
+/**
+ * Adapter: converts provider-agnostic ToolMiddleware[] into the SDK's native
+ * `hooks.PreToolUse` format.
+ *
+ * Each ToolMiddleware becomes one HookCallbackMatcher. If the middleware
+ * declares a `toolName` filter, the matcher's `matcher` field restricts it to
+ * that tool. The hook calls `middleware.beforeToolUse()` and, if it returns a
+ * modified input, injects `updatedInput` into the SDK's PreToolUse output so
+ * the tool runs with the new arguments.
+ */
+function toolMiddlewareToHooks(
+  middleware: ToolMiddleware[]
+): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
+  const matchers: HookCallbackMatcher[] = middleware
+    .filter((m) => typeof m.beforeToolUse === "function")
+    .map((m) => ({
+      matcher: m.toolName,
+      hooks: [
+        async (input: HookInput) => {
+          // The matcher fires for PreToolUse — guard the discriminant anyway
+          if (input.hook_event_name !== "PreToolUse") {
+            return { hookEventName: "PreToolUse" } as const;
+          }
+
+          const preInput = input as PreToolUseHookInput;
+          const toolInput = (preInput.tool_input ?? {}) as Record<string, unknown>;
+          const updatedInput = await m.beforeToolUse!(preInput.tool_name, toolInput);
+
+          if (!updatedInput) {
+            return { hookEventName: "PreToolUse" } as const;
+          }
+
+          return {
+            hookEventName: "PreToolUse",
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse" as const,
+              updatedInput,
+            },
+          } as const;
+        },
+      ],
+    }));
+
+  return matchers.length > 0 ? { PreToolUse: matchers } : {};
 }
 
 /**

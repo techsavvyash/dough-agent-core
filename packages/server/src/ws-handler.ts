@@ -3,7 +3,7 @@ import { DoughEventType } from "@dough/protocol";
 import type { ClientMessage, ServerMessage } from "@dough/protocol";
 import type { DoughSession } from "@dough/core";
 import { DoughAgent } from "@dough/core";
-import { isGitCommitCommand, appendAttributionTrailer } from "@dough/core";
+import { appendAttributionTrailer, isGitCommitCommand } from "@dough/core";
 import { ThreadManager } from "@dough/threads";
 import type { ThreadStore, FileDiffRecord } from "@dough/threads";
 import { FileTracker } from "./file-tracker.ts";
@@ -90,7 +90,14 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
 
     try {
       for await (const event of session.send(prompt)) {
-        // ── Bash git-commit interception (attribution) ──────────────
+        // ── Attribution fallback ─────────────────────────────────────
+        // The primary attribution mechanism is a ToolMiddleware applied at
+        // the DoughAgent level (createAttributionMiddleware in core), which
+        // fires BEFORE execution via the provider's PreToolUse hook and injects
+        // `--trailer` directly into the git commit command.
+        //
+        // This post-hoc amend is a safety net for edge cases where the hook
+        // couldn't fire: --amend commits, providers without hook support, etc.
         if (
           event.type === DoughEventType.ToolCallRequest &&
           event.name === "Bash" &&
@@ -103,7 +110,8 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           const bashCmd = pendingBashCalls.get(event.callId);
           if (bashCmd !== undefined) {
             pendingBashCalls.delete(event.callId);
-            if (isGitCommitCommand(bashCmd)) {
+            // Skip --amend commands (avoid double-amending the primary hook's work)
+            if (isGitCommitCommand(bashCmd) && !/--amend\b/.test(bashCmd)) {
               await appendAttributionTrailer(agent.getCwd());
             }
           }

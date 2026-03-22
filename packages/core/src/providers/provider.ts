@@ -1,10 +1,48 @@
 import type { DoughEvent, McpServerMap, McpServerStatus } from "@dough/protocol";
 import type { ThreadMessage } from "@dough/threads";
 
+/**
+ * Provider-agnostic tool middleware.
+ *
+ * Middleware is the canonical interception point for tool calls. Define
+ * cross-cutting concerns (attribution, logging, rate-limiting, etc.) once
+ * here — each provider adapter translates them to its native hook mechanism.
+ *
+ * Execution contract:
+ *   1. The provider calls `beforeToolUse` BEFORE the tool executes.
+ *   2. If `beforeToolUse` returns a new input record, the provider MUST use
+ *      that modified input instead of the original.
+ *   3. Returning `void`/`undefined` means "pass through unchanged".
+ */
+export interface ToolMiddleware {
+  /**
+   * Optional tool name filter (e.g. "Bash", "Write").
+   * If omitted, the middleware is applied to every tool call.
+   */
+  toolName?: string;
+
+  /**
+   * Called BEFORE the tool executes.
+   * Return a new input record to rewrite the tool's arguments,
+   * or return void/undefined to pass the original through unchanged.
+   */
+  beforeToolUse?(
+    toolName: string,
+    input: Record<string, unknown>
+  ): Promise<Record<string, unknown> | void>;
+}
+
 export interface SendOptions {
   model?: string;
   systemPrompt?: string;
   signal?: AbortSignal;
+  /**
+   * Provider-agnostic tool middleware applied before tool execution.
+   * Each provider translates these into its native hook mechanism.
+   * Middleware is applied in array order; the output of one is NOT
+   * chained as input to the next (they run independently).
+   */
+  toolMiddleware?: ToolMiddleware[];
 }
 
 /**

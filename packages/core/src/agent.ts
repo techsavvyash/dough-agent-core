@@ -8,7 +8,7 @@ import {
 } from "@dough/threads";
 
 import { DoughSession } from "./session.ts";
-import type { LLMProvider } from "./providers/provider.ts";
+import type { LLMProvider, ToolMiddleware } from "./providers/provider.ts";
 import { ClaudeProvider, type ClaudeProviderConfig } from "./providers/claude.ts";
 import { CodexProvider } from "./providers/codex.ts";
 import { buildAgentsContext } from "./agents-md.ts";
@@ -16,6 +16,7 @@ import { LLMSummaryGenerator } from "./summarizer.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { SkillManager } from "./skills/manager.ts";
 import type { McpServerMap } from "@dough/protocol";
+import { createAttributionMiddleware } from "./git-attribution.ts";
 
 export interface DoughAgentConfig {
   provider: "claude" | "codex" | LLMProvider;
@@ -35,6 +36,11 @@ export interface DoughAgentConfig {
   mcpServers?: McpServerMap;
   /** Set false to skip discovering skills. Defaults to true. */
   loadSkills?: boolean;
+  /**
+   * Additional tool middleware to apply beyond the platform defaults.
+   * Dough always applies attribution middleware; this lets callers add more.
+   */
+  toolMiddleware?: ToolMiddleware[];
 }
 
 /**
@@ -66,9 +72,22 @@ export class DoughAgent {
   private agentsContext: string | null = null;
   private agentsContextPromise: Promise<string> | null = null;
   private skillsDiscoveryPromise: Promise<void> | null = null;
+  /**
+   * Resolved tool middleware: platform defaults (attribution) + any caller-
+   * supplied additions. Immutable after construction — shared across all sessions
+   * created by this agent.
+   */
+  private readonly toolMiddleware: ToolMiddleware[];
 
   constructor(config: DoughAgentConfig) {
     this.config = config;
+
+    // Build the platform middleware stack. Attribution is always present —
+    // it's a core Dough invariant, not an opt-in feature.
+    this.toolMiddleware = [
+      createAttributionMiddleware(),
+      ...(config.toolMiddleware ?? []),
+    ];
 
     // Resolve provider
     if (typeof config.provider === "string") {
@@ -158,6 +177,7 @@ export class DoughAgent {
       threadManager: this.threadManager,
       systemPrompt,
       model: this.config.model,
+      toolMiddleware: this.toolMiddleware,
     });
   }
 
@@ -188,6 +208,7 @@ export class DoughAgent {
       threadManager: this.threadManager,
       systemPrompt,
       model: this.config.model,
+      toolMiddleware: this.toolMiddleware,
     });
     session.resumeThread(activeThreadId);
     return session;

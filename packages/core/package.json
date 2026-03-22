@@ -5,9 +5,9 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
     "@dough/protocol": "workspace:*",
     "@dough/threads": "workspace:*",
-    "@anthropic-ai/claude-agent-sdk": "latest",
     "@openai/codex-sdk": "latest"
   }
 }
