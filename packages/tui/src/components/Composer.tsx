@@ -70,18 +70,28 @@ export function Composer({
     [onSubmit]
   );
 
-  // ── Build placeholder ──────────────────────────────────
+  // ── Build top border with thinking indicator ───────────
   const timer =
     isStreaming && elapsed > 0 ? ` [${formatElapsed(elapsed)}]` : "";
-  const placeholder = isStreaming
-    ? `${symbols.thinking} Thinking...${timer} — Enter to queue`
-    : `${symbols.userPrefix} Type a message...`;
-  const prefixColor = isStreaming ? colors.warning : colors.primary;
+  const thinkingSegment = isStreaming
+    ? ` ${symbols.thinking} Thinking...${timer} `
+    : "";
+  const ruleBase = symbols.hrule;
+  const topBorder = isStreaming
+    ? `${ruleBase}${thinkingSegment}${symbols.hrule.repeat(
+        Math.max(0, width - 1 - thinkingSegment.length)
+      )}`
+    : hrule(width);
+
+  // ── Placeholder is always the normal prompt ────────────
+  const placeholder = `${symbols.userPrefix} Type a message...`;
+  const prefixColor = colors.primary;
 
   // ── Build footer parts ─────────────────────────────────
   const footerParts: string[] = [];
   if (isStreaming) {
     footerParts.push("Esc cancel");
+    footerParts.push("Enter queues");
   } else {
     footerParts.push("? commands");
   }
@@ -110,13 +120,11 @@ export function Composer({
     ? `${footerLeft}${" ".repeat(footerGap)}${footerRight}`
     : footerLeft;
 
-  const rule = hrule(width);
-
   return (
     <box flexDirection="column" height={3}>
-      {/* Top separator — changes color when streaming */}
+      {/* Top separator — embeds thinking indicator on the left when streaming */}
       <box height={1}>
-        <text fg={isStreaming ? colors.warning : colors.border}>{rule}</text>
+        <text fg={isStreaming ? colors.warning : colors.border}>{topBorder}</text>
       </box>
 
       {/* Input area */}
