@@ -161,6 +161,23 @@ export class DoughAgent {
     });
   }
 
+  /**
+   * Reconstruct a previously-saved session without creating a new thread.
+   * Used when resuming after a server restart — the thread history is still
+   * in the persistent store; we just need to point the session at it.
+   */
+  async resumeSession(sessionId: string, activeThreadId: string): Promise<DoughSession> {
+    const systemPrompt = await this.resolveSystemPrompt();
+    const session = new DoughSession(sessionId, {
+      provider: this.provider,
+      threadManager: this.threadManager,
+      systemPrompt,
+      model: this.config.model,
+    });
+    session.resumeThread(activeThreadId);
+    return session;
+  }
+
   getThreadManager(): ThreadManager {
     return this.threadManager;
   }
@@ -175,5 +192,9 @@ export class DoughAgent {
 
   getSkillManager(): SkillManager {
     return this.skillManager;
+  }
+
+  getCwd(): string {
+    return this.config.cwd ?? process.cwd();
   }
 }

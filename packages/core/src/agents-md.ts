@@ -42,7 +42,7 @@ export interface AgentsMdResult {
  * Find the git root by walking up from `startDir`.
  * Returns null if not inside a git repo.
  */
-async function findGitRoot(startDir: string): Promise<string | null> {
+export async function findGitRoot(startDir: string): Promise<string | null> {
   let dir = startDir;
   while (true) {
     const gitDir = `${dir}/.git`;

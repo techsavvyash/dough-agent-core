@@ -14,3 +14,8 @@ export type { AgentsMdEntry, AgentsMdResult, LoadOptions as AgentsMdLoadOptions 
 export { McpManager } from "./mcp/manager.ts";
 export { SkillManager } from "./skills/manager.ts";
 export { discoverSkills, loadSkill } from "./skills/loader.ts";
+export {
+  ATTRIBUTION_TRAILER,
+  isGitCommitCommand,
+  appendAttributionTrailer,
+} from "./git-attribution.ts";

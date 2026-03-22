@@ -3,7 +3,9 @@ import { DoughEventType } from "@dough/protocol";
 import type { ClientMessage, ServerMessage } from "@dough/protocol";
 import type { DoughSession } from "@dough/core";
 import { DoughAgent } from "@dough/core";
+import { isGitCommitCommand, appendAttributionTrailer } from "@dough/core";
 import { ThreadManager } from "@dough/threads";
+import type { HybridThreadStore } from "@dough/threads";
 import { FileTracker } from "./file-tracker.ts";
 
 export interface WSData {
@@ -33,10 +35,15 @@ function extractFilePath(args: Record<string, unknown>): string | null {
   return null;
 }
 
-export function createWSHandler(agent: DoughAgent) {
+export function createWSHandler(agent: DoughAgent, store?: HybridThreadStore) {
   const sessions = new Map<string, DoughSession>();
   /** One FileTracker per WS connection (per session) */
   const trackers = new Map<string, FileTracker>();
+  /**
+   * Tracks in-flight Bash tool calls so we can inspect the command after the
+   * result comes back. Keyed by callId. Cleared on response.
+   */
+  const pendingBashCalls = new Map<string, string>(); // callId → command string
 
   function getTracker(ws: ServerWebSocket<WSData>): FileTracker {
     return ws.data.fileTracker;
@@ -61,6 +68,17 @@ export function createWSHandler(agent: DoughAgent) {
           ws.data.sessionId = session.id;
           ws.data.session = session;
 
+          // Persist session so it can be reconstructed after server restart
+          const now = new Date().toISOString();
+          store?.saveSession({
+            id: session.id,
+            activeThreadId: session.currentThreadId!,
+            provider: msg.provider,
+            model: msg.model,
+            createdAt: now,
+            updatedAt: now,
+          });
+
           // Reset file tracker for new session
           getTracker(ws).reset();
 
@@ -77,8 +95,8 @@ export function createWSHandler(agent: DoughAgent) {
               threads: threadMetas,
               provider: msg.provider,
               model: msg.model,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
+              createdAt: now,
+              updatedAt: now,
             },
           };
           ws.send(JSON.stringify(reply));
@@ -113,6 +131,29 @@ export function createWSHandler(agent: DoughAgent) {
 
           try {
             for await (const event of session.send(msg.prompt)) {
+              // ── Bash git-commit interception (attribution) ──────────────
+              // Record every Bash call so we can inspect it on completion.
+              if (
+                event.type === DoughEventType.ToolCallRequest &&
+                event.name === "Bash" &&
+                typeof event.args.command === "string"
+              ) {
+                pendingBashCalls.set(event.callId, event.args.command as string);
+              }
+
+              // After a Bash call completes, check if it was `git commit`.
+              // If so, immediately amend HEAD to append the attribution trailer.
+              if (event.type === DoughEventType.ToolCallResponse && !event.isError) {
+                const bashCmd = pendingBashCalls.get(event.callId);
+                if (bashCmd !== undefined) {
+                  pendingBashCalls.delete(event.callId);
+                  if (isGitCommitCommand(bashCmd)) {
+                    await appendAttributionTrailer(agent.getCwd());
+                  }
+                }
+              }
+
+              // ── File write tracking (diffing) ────────────────────────────
               // Intercept tool calls that write files — snapshot before
               if (
                 event.type === DoughEventType.ToolCallRequest &&
@@ -162,6 +203,18 @@ export function createWSHandler(agent: DoughAgent) {
             ws.send(JSON.stringify(err));
           } finally {
             unsubStats();
+            // Update the persisted session with the latest activeThreadId
+            // (may have changed due to a handoff during the exchange)
+            if (store && session.currentThreadId) {
+              const rec = store.loadSession(session.id);
+              if (rec) {
+                store.saveSession({
+                  ...rec,
+                  activeThreadId: session.currentThreadId,
+                  updatedAt: new Date().toISOString(),
+                });
+              }
+            }
           }
           break;
         }
@@ -172,18 +225,37 @@ export function createWSHandler(agent: DoughAgent) {
         }
 
         case "resume": {
-          const existing = sessions.get(msg.sessionId);
-          if (existing) {
+          // First check live in-memory sessions
+          let resumed = sessions.get(msg.sessionId);
+
+          // Not in memory (e.g. server restarted) — try to reconstruct from DB
+          if (!resumed && store) {
+            const record = store.loadSession(msg.sessionId);
+            if (record) {
+              resumed = await agent.resumeSession(record.id, record.activeThreadId);
+              sessions.set(resumed.id, resumed);
+              console.log(`[ws] reconstructed session ${record.id} from db`);
+            }
+          }
+
+          if (resumed) {
             ws.data.sessionId = msg.sessionId;
-            ws.data.session = existing;
+            ws.data.session = resumed;
+
+            const tm = agent.getThreadManager();
+            const resumedThreads = await tm.listThreads(resumed.id);
+            const resumedMetas = resumedThreads.map((t) => ThreadManager.toMeta(t));
+            const record = store?.loadSession(msg.sessionId);
+
             const reply: ServerMessage = {
               kind: "session_info",
               session: {
-                id: existing.id,
-                activeThreadId: existing.currentThreadId!,
-                threads: [],
-                provider: "unknown",
-                createdAt: new Date().toISOString(),
+                id: resumed.id,
+                activeThreadId: resumed.currentThreadId!,
+                threads: resumedMetas,
+                provider: record?.provider ?? "unknown",
+                model: record?.model,
+                createdAt: record?.createdAt ?? new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
               },
             };
@@ -196,6 +268,73 @@ export function createWSHandler(agent: DoughAgent) {
             };
             ws.send(JSON.stringify(err));
           }
+          break;
+        }
+
+        case "switch_thread": {
+          // Resolve the target session — may differ from current
+          let targetSession = ws.data.session;
+
+          if (msg.sessionId !== ws.data.sessionId) {
+            // Cross-session switch: get or reconstruct the owning session
+            let found = sessions.get(msg.sessionId);
+            if (!found && store) {
+              const record = store.loadSession(msg.sessionId);
+              if (record) {
+                found = await agent.resumeSession(record.id, record.activeThreadId);
+                sessions.set(found.id, found);
+                console.log(`[ws] reconstructed session ${record.id} for switch_thread`);
+              }
+            }
+            if (found) {
+              targetSession = found;
+              ws.data.sessionId = msg.sessionId;
+              ws.data.session = targetSession;
+            }
+          }
+
+          if (!targetSession) {
+            const err: ServerMessage = {
+              kind: "error",
+              message: `Session ${msg.sessionId} not found`,
+              code: "SESSION_NOT_FOUND",
+            };
+            ws.send(JSON.stringify(err));
+            break;
+          }
+
+          // Switch active thread within the session
+          targetSession.resumeThread(msg.threadId);
+
+          // Persist the updated active thread
+          if (store) {
+            const rec = store.loadSession(targetSession.id);
+            if (rec) {
+              store.saveSession({
+                ...rec,
+                activeThreadId: msg.threadId,
+                updatedAt: new Date().toISOString(),
+              });
+            }
+          }
+
+          // Send back updated session info
+          const tm = agent.getThreadManager();
+          const switchedThreads = await tm.listThreads(targetSession.id);
+          const switchRecord = store?.loadSession(targetSession.id);
+          const switchReply: ServerMessage = {
+            kind: "session_info",
+            session: {
+              id: targetSession.id,
+              activeThreadId: targetSession.currentThreadId!,
+              threads: switchedThreads.map((t) => ThreadManager.toMeta(t)),
+              provider: switchRecord?.provider ?? "unknown",
+              model: switchRecord?.model,
+              createdAt: switchRecord?.createdAt ?? new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          };
+          ws.send(JSON.stringify(switchReply));
           break;
         }
 
@@ -230,24 +369,47 @@ export function createWSHandler(agent: DoughAgent) {
         }
 
         case "list_threads": {
-          const tm = agent.getThreadManager();
-          const threads = await tm.listThreads(msg.sessionId);
-          const threadMetas = threads.map((t) => ThreadManager.toMeta(t));
+          let threadMetas;
+          if (msg.sessionId) {
+            const tm = agent.getThreadManager();
+            const threads = await tm.listThreads(msg.sessionId);
+            threadMetas = threads.map((t) => ThreadManager.toMeta(t));
+          } else {
+            // No sessionId — return all threads across all sessions from the store
+            const all = store ? await store.listAll() : [];
+            threadMetas = all.map((t) => ({
+              id: t.id,
+              sessionId: t.sessionId,
+              parentThreadId: t.parentThreadId,
+              origin: t.origin,
+              status: t.status,
+              tokenCount: t.tokenCount,
+              maxTokens: t.maxTokens,
+              messageCount: 0, // metadata only; avoid loading all blobs
+              summary: t.summary,
+              createdAt: t.createdAt,
+              updatedAt: t.updatedAt,
+            }));
+          }
           const reply: ServerMessage = { kind: "threads_list", threads: threadMetas };
           ws.send(JSON.stringify(reply));
           break;
         }
 
         case "list_sessions": {
-          // Return metadata for all known sessions
-          const sessionMetas = Array.from(sessions.entries()).map(
-            ([id, s]) => ({
-              id,
-              activeThreadId: s.currentThreadId ?? "unknown",
-              threads: [],
-              provider: "unknown",
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
+          // Return metadata for all known in-memory sessions, with their threads
+          const tm = agent.getThreadManager();
+          const sessionMetas = await Promise.all(
+            Array.from(sessions.entries()).map(async ([id, s]) => {
+              const threads = await tm.listThreads(id);
+              return {
+                id,
+                activeThreadId: s.currentThreadId ?? "unknown",
+                threads: threads.map((t) => ThreadManager.toMeta(t)),
+                provider: "unknown",
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              };
             })
           );
           const reply: ServerMessage = {
