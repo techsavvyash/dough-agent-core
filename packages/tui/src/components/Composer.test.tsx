@@ -1,4 +1,4 @@
-import { test, expect, describe, beforeEach } from "bun:test";
+import { test, expect, describe } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import { createSpy } from "@opentui/core/testing";
 import { act } from "react";
@@ -17,9 +17,9 @@ const fileStats: ChangeStats = {
   totalAdded: 42,
   totalRemoved: 8,
   files: [
-    { path: "a.ts", added: 20, removed: 4 },
-    { path: "b.ts", added: 12, removed: 2 },
-    { path: "c.ts", added: 10, removed: 2 },
+    { filePath: "a.ts", linesAdded: 20, linesRemoved: 4, status: "modified" },
+    { filePath: "b.ts", linesAdded: 12, linesRemoved: 2, status: "modified" },
+    { filePath: "c.ts", linesAdded: 10, linesRemoved: 2, status: "modified" },
   ],
 };
 
@@ -32,6 +32,7 @@ describe("Composer", () => {
       <Composer
         onSubmit={onSubmit}
         isStreaming={false}
+        queuedCount={0}
         onAbort={onAbort}
         stats={emptyStats}
         hasChanges={false}
@@ -53,6 +54,7 @@ describe("Composer", () => {
       <Composer
         onSubmit={onSubmit}
         isStreaming={true}
+        queuedCount={0}
         onAbort={onAbort}
         stats={emptyStats}
         hasChanges={false}
@@ -74,6 +76,7 @@ describe("Composer", () => {
       <Composer
         onSubmit={onSubmit}
         isStreaming={false}
+        queuedCount={0}
         onAbort={onAbort}
         stats={fileStats}
         hasChanges={true}
@@ -97,6 +100,7 @@ describe("Composer", () => {
       <Composer
         onSubmit={onSubmit}
         isStreaming={true}
+        queuedCount={0}
         onAbort={onAbort}
         stats={emptyStats}
         hasChanges={false}
@@ -123,6 +127,7 @@ describe("Composer", () => {
       <Composer
         onSubmit={onSubmit}
         isStreaming={false}
+        queuedCount={0}
         onAbort={onAbort}
         stats={emptyStats}
         hasChanges={false}
@@ -136,7 +141,7 @@ describe("Composer", () => {
     await renderOnce();
 
     expect(onSubmit.calls).toHaveLength(1);
-    expect(onSubmit.calls[0][0]).toBe("hello world");
+    expect(onSubmit.calls[0]![0]).toBe("hello world");
   });
 
   test("does not submit empty text", async () => {
@@ -147,6 +152,7 @@ describe("Composer", () => {
       <Composer
         onSubmit={onSubmit}
         isStreaming={false}
+        queuedCount={0}
         onAbort={onAbort}
         stats={emptyStats}
         hasChanges={false}
@@ -169,6 +175,7 @@ describe("Composer", () => {
       <Composer
         onSubmit={onSubmit}
         isStreaming={false}
+        queuedCount={0}
         onAbort={onAbort}
         stats={emptyStats}
         hasChanges={false}

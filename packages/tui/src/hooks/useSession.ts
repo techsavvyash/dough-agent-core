@@ -130,6 +130,7 @@ export function useSession(client: DoughClient) {
             // Find the message with this tool call and update its status
             for (let i = prev.length - 1; i >= 0; i--) {
               const msg = prev[i];
+              if (!msg) continue;
               if (msg.toolCalls) {
                 const idx = msg.toolCalls.findIndex(
                   (tc) => tc.callId === event.callId
@@ -137,7 +138,7 @@ export function useSession(client: DoughClient) {
                 if (idx >= 0) {
                   const updatedCalls = [...msg.toolCalls];
                   updatedCalls[idx] = {
-                    ...updatedCalls[idx],
+                    ...updatedCalls[idx]!,
                     status: event.isError ? "error" : "success",
                     result: event.result,
                   };

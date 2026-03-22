@@ -76,7 +76,7 @@ export function InputBar({ onSubmit, isStreaming, onAbort, onOpenPalette }: Inpu
           ref={inputRef}
           focused
           placeholder={isStreaming ? `${prefix} Thinking...${timer} (Esc to cancel)` : `${prefix} Type a message... (? for commands)`}
-          onSubmit={handleSubmit}
+          onSubmit={(v: unknown) => handleSubmit(String(v))}
           textColor={colors.text}
           placeholderColor={prefixColor}
         />

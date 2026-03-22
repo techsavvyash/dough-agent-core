@@ -29,7 +29,7 @@ export function ToolCallView({ toolCall }: ToolCallViewProps) {
         <text fg={colors.textDim}>{label}</text>
         {argSummary ? <text fg={colors.textMuted}> {argSummary}</text> : null}
       </box>
-      {status === "error" && result && (
+      {status === "error" && result != null && (
         <box paddingLeft={1} height={1}>
           <text fg={colors.error}>{String(result).slice(0, 120)}</text>
         </box>

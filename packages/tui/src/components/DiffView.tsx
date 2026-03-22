@@ -90,7 +90,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
 
         {/* File list panel — collapsible with `b` */}
         {sidebarVisible && (
-          <box width={FILE_LIST_W} flexDirection="column" borderRight>
+          <box width={FILE_LIST_W} flexDirection="column" border={["right"]}>
             <scrollbox flex={1}>
               {diffs.map((diff, i) => {
                 const isSel = i === selectedFileIndex;

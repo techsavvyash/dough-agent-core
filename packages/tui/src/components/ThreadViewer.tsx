@@ -321,7 +321,7 @@ function ThreadDetail({
             <text fg={colors.accent}>{"Summary:"}</text>
           </box>
           <box>
-            <text fg={colors.textDim} wrap>
+            <text fg={colors.textDim} wrapMode="word">
               {thread.summary.slice(0, 300)}
             </text>
           </box>

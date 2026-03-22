@@ -133,7 +133,7 @@ export function Composer({
           ref={inputRef}
           focused
           placeholder={placeholder}
-          onSubmit={handleSubmit}
+          onSubmit={(v: unknown) => handleSubmit(String(v))}
           textColor={colors.text}
           placeholderColor={prefixColor}
         />

@@ -27,7 +27,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Typecheck (tsc --noEmit)
-        run: bunx tsc --noEmit
+        run: bunx tsc --noEmit --project tsconfig.build.json
 
   # ── Unit Tests ─────────────────────────────────────────────────────────────
   # core / server / threads / protocol / sdk

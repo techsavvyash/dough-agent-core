@@ -15,7 +15,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     return (
       <box flexDirection="row" paddingX={1}>
         <text fg={colors.accent}>{symbols.userPrefix} </text>
-        <text fg={colors.text} flex={1} wrap="wrap">{content}</text>
+        <text fg={colors.text} flex={1} wrapMode="word">{content}</text>
       </box>
     );
   }
@@ -30,7 +30,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {thought && (
           <box paddingX={1} flexDirection="row">
             <text fg={colors.primary}>{symbols.thought} </text>
-            <text fg={colors.textMuted} flex={1} wrap="wrap">{thought}</text>
+            <text fg={colors.textMuted} flex={1} wrapMode="word">{thought}</text>
           </box>
         )}
 
@@ -77,7 +77,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
   return (
     <box paddingX={3}>
-      <text fg={colors.textDim} flex={1} wrap="wrap">{content}</text>
+      <text fg={colors.textDim} flex={1} wrapMode="word">{content}</text>
     </box>
   );
 }
@@ -133,7 +133,7 @@ function SystemMessage({ content }: { content: string }) {
       borderColor={borderColor}
     >
       <text fg={iconColor}>{icon} </text>
-      <text fg={colors.textDim} flex={1} wrap="wrap">{content}</text>
+      <text fg={colors.textDim} flex={1} wrapMode="word">{content}</text>
     </box>
   );
 }
