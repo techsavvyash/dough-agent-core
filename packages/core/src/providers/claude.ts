@@ -135,11 +135,13 @@ export class ClaudeProvider implements LLMProvider {
     let gotStreamDeltas = false;
     let lastUsage: UsageMetadata = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
-    // Build the prompt: plain string, or AsyncIterable<SDKUserMessage> for multimodal
-    const promptValue = buildPrompt(
-      lastUserMessage.content,
-      options.attachments,
-    );
+    // Capture the raw inputs so the retry path can rebuild a fresh AsyncIterable.
+    // AsyncIterables are single-use — if the first query() call consumes the
+    // iterable and then "No conversation found" triggers a retry, the second
+    // query() would receive an already-exhausted iterator (0 messages).
+    // By rebuilding via buildPrompt() on each attempt we avoid this.
+    const promptText = lastUserMessage.content;
+    const promptAttachments = options.attachments;
 
     // Attempt the query — may need to retry without `resume` if the
     // provider-native session JSONL was deleted (server restart, cleanup, etc.)
@@ -149,6 +151,8 @@ export class ClaudeProvider implements LLMProvider {
       self: ClaudeProvider,
       opts: Options
     ): AsyncGenerator<DoughEvent> {
+      // Rebuild the prompt on every attempt so the AsyncIterable is fresh.
+      const promptValue = buildPrompt(promptText, promptAttachments);
       try {
         const q = query({
           prompt: promptValue,
@@ -505,10 +509,12 @@ function toolMiddlewareToHooks(
  * • Prompt + image attachments → AsyncIterable<SDKUserMessage> with a
  *   multimodal content array: [image blocks…, text block]
  *
- * IMPORTANT: The SDKUserMessage `session_id` must be a FRESH UUID, never the
- * `resume` session ID. If it matched the resume ID the SDK would treat the
- * yielded message as a replayed (already-processed) message from the JSONL
- * and silently skip it, so Claude would never receive the image content.
+ * The SDK source (sdk.mjs) shows that for a plain string prompt it writes:
+ *   { type:"user", session_id:"", message:{role:"user", content:[{type:"text",text:Q}]}, parent_tool_use_id:null }
+ *
+ * We replicate that exact envelope for image prompts, using session_id:""
+ * (the empty string the CLI expects) and placing image blocks before the
+ * text block in the content array.
  */
 function buildPrompt(
   text: string,
@@ -530,15 +536,13 @@ function buildPrompt(
     { type: "text", text },
   ];
 
-  // Always use a fresh UUID — must differ from the `resume` session ID.
-  const messageId = crypto.randomUUID();
-
+  // Use session_id:"" to match the exact envelope the SDK sends for string prompts.
   async function* makeStream(): AsyncIterable<SDKUserMessage> {
     yield {
       type: "user",
       message: { role: "user", content },
       parent_tool_use_id: null,
-      session_id: messageId,
+      session_id: "",
     } as SDKUserMessage;
   }
 
