@@ -48,6 +48,34 @@ packages/
 - TUI uses OpenTUI (`@opentui/react`) with lowercase JSX intrinsics: `<box>`, `<text>`, `<input>`, `<scrollbox>`
 - TUI requires `"jsxImportSource": "@opentui/react"` in tsconfig
 
+## Todo tool
+
+You have access to a native `TodoWrite`, `TodoRead`, and `TodoComplete` tool via MCP.
+
+### When to use todos
+- **Always** create a todo list at the start of any multi-step task (3 or more distinct steps).
+- Use todos to track progress on long-running work so the user can see what's done and what's next.
+- Do **not** create todos for simple one-shot questions or single-command tasks.
+
+### How to use todos
+
+1. **Plan first** — call `TodoWrite` once to lay out all the steps before starting work.
+2. **One active todo at a time** — mark the current item `in_progress`, finish it, then move to the next.
+3. **Complete with verification** — call `TodoComplete` with the appropriate `verification` strategy:
+   - `{ strategy: "file_exists", path: "..." }` — when the task produces a file.
+   - `{ strategy: "command", command: "bun test ..." }` — when a test or script must pass.
+   - `{ strategy: "file_contains", path: "...", pattern: "..." }` — when a specific change must appear in a file.
+   - `{ strategy: "test_pass" }` — when the whole test suite must be green.
+   - `{ strategy: "manual", instructions: "..." }` — when only the user can confirm completion.
+   - `{ strategy: "llm_judge", prompt: "..." }` — when completion requires reasoning to verify.
+4. **Keep todos honest** — if a step turns out to be unnecessary, delete it rather than leaving it `pending`.
+5. **Surface blockers** — if a todo cannot be completed, update its title to describe the blocker and set it `blocked` (via `TodoWrite` update).
+
+### Priority guidelines
+- `high` — blocking other todos or explicitly urgent.
+- `medium` — normal work items (default).
+- `low` — nice-to-haves, cleanup, or follow-up tasks.
+
 ## Boundaries
 
 ### Always do
