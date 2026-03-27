@@ -139,7 +139,6 @@ export class ClaudeProvider implements LLMProvider {
     const promptValue = buildPrompt(
       lastUserMessage.content,
       options.attachments,
-      this.activeSessionId
     );
 
     // Attempt the query — may need to retry without `resume` if the
@@ -506,13 +505,14 @@ function toolMiddlewareToHooks(
  * • Prompt + image attachments → AsyncIterable<SDKUserMessage> with a
  *   multimodal content array: [image blocks…, text block]
  *
- * The SDKUserMessage `session_id` is the active Claude session UUID (or a
- * fresh UUID when starting a new session). The SDK uses it for JSONL bookkeeping.
+ * IMPORTANT: The SDKUserMessage `session_id` must be a FRESH UUID, never the
+ * `resume` session ID. If it matched the resume ID the SDK would treat the
+ * yielded message as a replayed (already-processed) message from the JSONL
+ * and silently skip it, so Claude would never receive the image content.
  */
 function buildPrompt(
   text: string,
   attachments: Attachment[] | undefined,
-  activeSessionId: string | null
 ): string | AsyncIterable<SDKUserMessage> {
   if (!attachments || attachments.length === 0) return text;
 
@@ -530,14 +530,15 @@ function buildPrompt(
     { type: "text", text },
   ];
 
-  const sessionId = activeSessionId ?? crypto.randomUUID();
+  // Always use a fresh UUID — must differ from the `resume` session ID.
+  const messageId = crypto.randomUUID();
 
   async function* makeStream(): AsyncIterable<SDKUserMessage> {
     yield {
       type: "user",
       message: { role: "user", content },
       parent_tool_use_id: null,
-      session_id: sessionId,
+      session_id: messageId,
     } as SDKUserMessage;
   }
 
