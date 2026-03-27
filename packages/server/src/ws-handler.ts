@@ -1,9 +1,10 @@
 import type { ServerWebSocket } from "bun";
 import { DoughEventType } from "@dough/protocol";
-import type { ClientMessage, ServerMessage } from "@dough/protocol";
+import type { Attachment, ClientMessage, ServerMessage } from "@dough/protocol";
 import type { DoughSession } from "@dough/core";
 import { DoughAgent } from "@dough/core";
 import { appendAttributionTrailer, isGitCommitCommand } from "@dough/core";
+import type { TodoManager } from "@dough/core";
 import { ThreadManager } from "@dough/threads";
 import type { ThreadStore, FileDiffRecord } from "@dough/threads";
 import { FileTracker } from "./file-tracker.ts";
@@ -23,10 +24,14 @@ export interface WSData {
   sessionId: string | null;
   session: DoughSession | null;
   fileTracker: FileTracker;
-  /** Prompts waiting to run once the current agent turn completes. */
-  sendQueue: string[];
+  /** Prompts (+ optional attachments) waiting to run once the current agent turn completes. */
+  sendQueue: { prompt: string; attachments?: Attachment[] }[];
   /** True while drainQueue() is iterating; prevents concurrent drains. */
   isProcessingQueue: boolean;
+  /** Pending manual todo verifications: todoId → resolve(approved) */
+  pendingManualVerifications: Map<string, (approved: boolean) => void>;
+  /** Unsubscribe function for the TodoManager onChange listener */
+  unsubTodos?: () => void;
 }
 
 /**
@@ -76,7 +81,8 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
   async function processOneSend(
     ws: ServerWebSocket<WSData>,
     session: DoughSession,
-    prompt: string
+    prompt: string,
+    attachments?: Attachment[]
   ): Promise<void> {
     const tracker = ws.data.fileTracker;
 
@@ -89,7 +95,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
     });
 
     try {
-      for await (const event of session.send(prompt)) {
+      for await (const event of session.send(prompt, attachments)) {
         // ── Attribution fallback ─────────────────────────────────────
         // The primary attribution mechanism is a ToolMiddleware applied at
         // the DoughAgent level (createAttributionMiddleware in core), which
@@ -191,8 +197,8 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
     while (ws.data.sendQueue.length > 0) {
       const session = ws.data.session;
       if (!session) break;
-      const prompt = ws.data.sendQueue.shift()!;
-      await processOneSend(ws, session, prompt);
+      const item = ws.data.sendQueue.shift()!;
+      await processOneSend(ws, session, item.prompt, item.attachments);
     }
 
     ws.data.isProcessingQueue = false;
@@ -272,6 +278,19 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
       ws.data.fileTracker = new FileTracker({ persistence });
       ws.data.sendQueue = [];
       ws.data.isProcessingQueue = false;
+      ws.data.pendingManualVerifications = new Map();
+
+      // Set up todo change listener for push notifications
+      const todoMgr = agent.getTodoManager();
+      if (todoMgr) {
+        ws.data.unsubTodos = todoMgr.onChange((todos, sessionId) => {
+          if (sessionId === ws.data.sessionId) {
+            const pushMsg: ServerMessage = { kind: "todos_update", todos };
+            ws.send(JSON.stringify(pushMsg));
+          }
+        });
+      }
+
       console.log(`[ws] client connected (diffStore=${!!diffStore}, persistence=${!!persistence})`);
     },
 
@@ -339,7 +358,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           // Enqueue the prompt. If something is already running, notify the
           // client that this message is queued and will run when the current
           // turn completes. drainQueue() is idempotent — safe to call every time.
-          ws.data.sendQueue.push(msg.prompt);
+          ws.data.sendQueue.push({ prompt: msg.prompt, attachments: msg.attachments });
           const position = ws.data.sendQueue.length;
 
           if (position > 1) {
@@ -650,6 +669,36 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           break;
         }
 
+        case "todos_list": {
+          const tm = agent.getTodoManager();
+          if (!tm) {
+            const err: ServerMessage = { kind: "error", message: "Todos feature not enabled", code: "TODOS_DISABLED" };
+            ws.send(JSON.stringify(err));
+            break;
+          }
+          const todos = await tm.read({}, msg.sessionId);
+          const reply: ServerMessage = { kind: "todos_update", todos };
+          ws.send(JSON.stringify(reply));
+          break;
+        }
+
+        case "todo_verify": {
+          const resolver = ws.data.pendingManualVerifications.get(msg.todoId);
+          if (resolver) {
+            resolver(msg.approved);
+            ws.data.pendingManualVerifications.delete(msg.todoId);
+          }
+          const tm = agent.getTodoManager();
+          if (tm && ws.data.sessionId) {
+            // Finalize the verification in the store
+            await tm.finalizeManualVerification(msg.todoId, msg.approved);
+            const todos = await tm.read({}, ws.data.sessionId);
+            const pushMsg: ServerMessage = { kind: "todos_update", todos };
+            ws.send(JSON.stringify(pushMsg));
+          }
+          break;
+        }
+
         default: {
           const err: ServerMessage = {
             kind: "error",
@@ -661,6 +710,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
     },
 
     close(ws: ServerWebSocket<WSData>) {
+      ws.data.unsubTodos?.();
       console.log("[ws] client disconnected");
     },
   };

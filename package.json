@@ -14,7 +14,8 @@
     "test:ui": "bun test packages/tui",
     "typecheck": "bunx tsc --noEmit",
     "commit": "cz",
-    "prepare": "husky"
+    "prepare": "husky",
+    "dough": "bun run packages/cli/src/index.ts"
   },
   "config": {
     "commitizen": {

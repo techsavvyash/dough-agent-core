@@ -9,6 +9,7 @@ import type {
   McpServerStatus,
   SkillStatus,
   HistoricalMessage,
+  TodoItem,
 } from "@dough/protocol";
 
 type EventHandler = (event: DoughEvent) => void;
@@ -22,6 +23,8 @@ type SkillsHandler = (skills: SkillStatus[]) => void;
 type SkillContentHandler = (name: string, instructions: string) => void;
 type QueueUpdateHandler = (position: number) => void;
 type ThreadHistoryHandler = (threadId: string, messages: HistoricalMessage[]) => void;
+type TodosHandler = (todos: TodoItem[]) => void;
+type TodoVerificationRequestHandler = (todoId: string, title: string, instructions: string) => void;
 
 export class DoughClient {
   private ws: WebSocket | null = null;
@@ -37,6 +40,8 @@ export class DoughClient {
   private skillContentHandlers = new Set<SkillContentHandler>();
   private queueUpdateHandlers = new Set<QueueUpdateHandler>();
   private threadHistoryHandlers = new Set<ThreadHistoryHandler>();
+  private todosHandlers = new Set<TodosHandler>();
+  private todoVerificationRequestHandlers = new Set<TodoVerificationRequestHandler>();
 
   constructor(private serverUrl: string = "ws://localhost:4200/ws") {}
 
@@ -90,6 +95,13 @@ export class DoughClient {
           case "thread_history":
             for (const h of this.threadHistoryHandlers) h(msg.threadId, msg.messages);
             break;
+          case "todos_update":
+            for (const h of this.todosHandlers) h(msg.todos);
+            break;
+          case "todo_verification_request":
+            for (const h of this.todoVerificationRequestHandlers)
+              h(msg.todoId, msg.title, msg.instructions);
+            break;
           case "error":
             for (const h of this.errorHandlers) h(msg.message, msg.code);
             break;
@@ -109,8 +121,8 @@ export class DoughClient {
     this.sendMessage({ kind: "create", provider, model });
   }
 
-  send(prompt: string, threadId?: string): void {
-    this.sendMessage({ kind: "send", prompt, threadId });
+  send(prompt: string, threadId?: string, attachments?: import("@dough/protocol").Attachment[]): void {
+    this.sendMessage({ kind: "send", prompt, threadId, attachments });
   }
 
   abort(): void {
@@ -223,6 +235,24 @@ export class DoughClient {
   onThreadHistory(handler: ThreadHistoryHandler): () => void {
     this.threadHistoryHandlers.add(handler);
     return () => this.threadHistoryHandlers.delete(handler);
+  }
+
+  listTodos(sessionId: string): void {
+    this.sendMessage({ kind: "todos_list", sessionId });
+  }
+
+  verifyTodo(todoId: string, approved: boolean): void {
+    this.sendMessage({ kind: "todo_verify", todoId, approved });
+  }
+
+  onTodos(handler: TodosHandler): () => void {
+    this.todosHandlers.add(handler);
+    return () => this.todosHandlers.delete(handler);
+  }
+
+  onTodoVerificationRequest(handler: TodoVerificationRequestHandler): () => void {
+    this.todoVerificationRequestHandlers.add(handler);
+    return () => this.todoVerificationRequestHandlers.delete(handler);
   }
 
   disconnect(): void {

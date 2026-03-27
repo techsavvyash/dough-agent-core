@@ -3,6 +3,7 @@ import type { SessionMeta, ThreadMeta } from "./session.ts";
 import type { DiffPayload } from "./snapshots.ts";
 import type { McpServerConfig, McpServerStatus } from "./mcp.ts";
 import type { SkillStatus } from "./skills.ts";
+import type { TodoItem } from "./todos.ts";
 
 /**
  * A single message from a persisted thread's history.
@@ -16,9 +17,20 @@ export interface HistoricalMessage {
   timestamp: string;
 }
 
+/** A file or image attached to a user message. */
+export interface Attachment {
+  type: "image";
+  /** MIME type of the image */
+  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  /** Base64-encoded image data */
+  data: string;
+  /** Optional display name (e.g. "paste-1234.png") */
+  name?: string;
+}
+
 // Client → Server
 export type ClientMessage =
-  | { kind: "send"; prompt: string; threadId?: string }
+  | { kind: "send"; prompt: string; threadId?: string; attachments?: Attachment[] }
   | { kind: "resume"; sessionId: string }
   | { kind: "create"; provider: string; model?: string }
   | { kind: "abort" }
@@ -34,7 +46,10 @@ export type ClientMessage =
   | { kind: "mcp_list" }
   // Skills
   | { kind: "skills_list" }
-  | { kind: "skill_activate"; name: string };
+  | { kind: "skill_activate"; name: string }
+  // Todos
+  | { kind: "todos_list"; sessionId: string }
+  | { kind: "todo_verify"; todoId: string; approved: boolean };
 
 // Server → Client
 export type ServerMessage =
@@ -59,4 +74,7 @@ export type ServerMessage =
    * Historical messages for the active thread, sent after a switch_thread or
    * resume so the TUI can populate its message panel with prior conversation.
    */
-  | { kind: "thread_history"; threadId: string; messages: HistoricalMessage[] };
+  | { kind: "thread_history"; threadId: string; messages: HistoricalMessage[] }
+  // Todos
+  | { kind: "todos_update"; todos: TodoItem[] }
+  | { kind: "todo_verification_request"; todoId: string; title: string; instructions: string };

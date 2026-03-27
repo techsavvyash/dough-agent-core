@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import type { Attachment } from "@dough/protocol";
 import { DoughClient } from "./client.ts";
 import { useSession } from "./hooks/useSession.ts";
 import { useChangeStats } from "./hooks/useChangeStats.ts";
@@ -111,21 +112,21 @@ export function App({ serverUrl, provider, model }: AppProps) {
   }, [client, provider, model]);
 
   const handleSubmit = useCallback(
-    (text: string) => {
-      // Slash commands open palette or execute directly
+    (text: string, attachments?: Attachment[]) => {
+      // Slash commands open palette or execute directly (no attachments)
       if (text === "?" || text === "/") {
         setShowPalette(true);
         return;
       }
 
       // Handle inline slash commands
-      if (text.startsWith("/")) {
+      if (text.startsWith("/") && !attachments?.length) {
         const cmd = text.slice(1).trim().toLowerCase();
         executeCommand(cmd);
         return;
       }
 
-      send(text);
+      send(text, attachments);
     },
     [send]
   );

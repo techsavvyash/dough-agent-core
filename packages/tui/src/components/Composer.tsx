@@ -1,11 +1,12 @@
 import { useCallback, useRef, useState, useEffect } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { InputRenderable } from "@opentui/core";
-import type { ChangeStats } from "@dough/protocol";
+import type { Attachment, ChangeStats } from "@dough/protocol";
 import { colors, symbols, hrule } from "../theme.ts";
+import { pasteImageFromClipboard } from "../hooks/useClipboard.ts";
 
 interface ComposerProps {
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string, attachments?: Attachment[]) => void;
   isStreaming: boolean;
   queuedCount: number;
   onAbort: () => void;
@@ -33,6 +34,8 @@ export function Composer({
   const inputRef = useRef<InputRenderable>(null);
   const { width } = useTerminalDimensions();
   const [elapsed, setElapsed] = useState(0);
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
+  const [pasteStatus, setPasteStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isStreaming) {
@@ -55,19 +58,33 @@ export function Composer({
         onOpenPalette();
       }
     }
+    // Ctrl+V: paste image from clipboard
+    if (key.ctrl && key.name === "v" && !isStreaming) {
+      setPasteStatus("Reading clipboard…");
+      pasteImageFromClipboard().then((attachment) => {
+        if (attachment) {
+          setPendingAttachments((prev) => [...prev, attachment]);
+          setPasteStatus(null);
+        } else {
+          setPasteStatus("No image in clipboard");
+          setTimeout(() => setPasteStatus(null), 2000);
+        }
+      });
+    }
   });
 
   const handleSubmit = useCallback(
     (value: string) => {
       const trimmed = value.trim();
-      if (!trimmed) return;
+      if (!trimmed && pendingAttachments.length === 0) return;
       // Allow submission while streaming — the server will queue it.
-      onSubmit(trimmed);
+      onSubmit(trimmed, pendingAttachments.length > 0 ? pendingAttachments : undefined);
+      setPendingAttachments([]);
       if (inputRef.current) {
         inputRef.current.value = "";
       }
     },
-    [onSubmit]
+    [onSubmit, pendingAttachments]
   );
 
   // ── Build top border with thinking indicator ───────────
@@ -94,6 +111,7 @@ export function Composer({
     footerParts.push("Enter queues");
   } else {
     footerParts.push("? commands");
+    footerParts.push("Ctrl+V image");
   }
   if (queuedCount > 0) {
     const label = queuedCount === 1 ? "message" : "messages";
@@ -101,6 +119,12 @@ export function Composer({
   }
   if (hasChanges) {
     footerParts.push("Ctrl+D diffs");
+  }
+  if (pasteStatus) {
+    footerParts.push(pasteStatus);
+  } else if (pendingAttachments.length > 0) {
+    const label = pendingAttachments.length === 1 ? "image" : "images";
+    footerParts.push(`📎 ${pendingAttachments.length} ${label} attached`);
   }
 
   let statsText = "";

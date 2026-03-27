@@ -1,5 +1,5 @@
 import { DoughEventType } from "@dough/protocol";
-import type { DoughEvent } from "@dough/protocol";
+import type { Attachment, DoughEvent } from "@dough/protocol";
 import type { ThreadManager, ThreadMessage } from "@dough/threads";
 import type { LLMProvider, SendOptions, ToolMiddleware } from "./providers/provider.ts";
 
@@ -57,7 +57,7 @@ export class DoughSession {
     this.activeThreadId = threadId;
   }
 
-  async *send(prompt: string): AsyncGenerator<DoughEvent> {
+  async *send(prompt: string, attachments?: Attachment[]): AsyncGenerator<DoughEvent> {
     if (!this.activeThreadId) {
       await this.initialize();
     }
@@ -103,6 +103,7 @@ export class DoughSession {
       systemPrompt: this.systemPrompt,
       signal: this.abortController.signal,
       toolMiddleware: this.toolMiddleware.length > 0 ? this.toolMiddleware : undefined,
+      attachments: attachments?.length ? attachments : undefined,
     };
 
     let fullResponse = "";

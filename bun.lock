@@ -14,6 +14,13 @@
         "typescript": "^5",
       },
     },
+    "packages/cli": {
+      "name": "@dough/cli",
+      "version": "0.1.0",
+      "bin": {
+        "dough": "src/index.ts",
+      },
+    },
     "packages/core": {
       "name": "@dough/core",
       "version": "0.1.0",
@@ -113,6 +120,8 @@
     "@conventional-changelog/git-client": ["@conventional-changelog/git-client@2.6.0", "", { "dependencies": { "@simple-libs/child-process-utils": "^1.0.0", "@simple-libs/stream-utils": "^1.2.0", "semver": "^7.5.2" }, "peerDependencies": { "conventional-commits-filter": "^5.0.0", "conventional-commits-parser": "^6.3.0" }, "optionalPeers": ["conventional-commits-filter", "conventional-commits-parser"] }, "sha512-T+uPDciKf0/ioNNDpMGc8FDsehJClZP0yR3Q5MN6wE/Y/1QZ7F+80OgznnTCOlMEG4AV0LvH2UJi3C/nBnaBUg=="],
 
     "@dimforge/rapier2d-simd-compat": ["@dimforge/rapier2d-simd-compat@0.17.3", "", {}, "sha512-bijvwWz6NHsNj5e5i1vtd3dU2pDhthSaTUZSh14DUGGKJfw8eMnlWZsxwHBxB/a3AXVNDjL9abuHw1k9FGR+jg=="],
+
+    "@dough/cli": ["@dough/cli@workspace:packages/cli"],
 
     "@dough/core": ["@dough/core@workspace:packages/core"],
 

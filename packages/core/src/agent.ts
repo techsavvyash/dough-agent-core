@@ -17,6 +17,9 @@ import { McpManager } from "./mcp/manager.ts";
 import { SkillManager } from "./skills/manager.ts";
 import type { McpServerMap } from "@dough/protocol";
 import { createAttributionMiddleware } from "./git-attribution.ts";
+import { TodoManager } from "./todos/manager.ts";
+import { TodoVerifier } from "./todos/verifier.ts";
+import type { TodoStore } from "./todos/store.ts";
 
 export interface DoughAgentConfig {
   provider: "claude" | "codex" | LLMProvider;
@@ -41,6 +44,8 @@ export interface DoughAgentConfig {
    * Dough always applies attribution middleware; this lets callers add more.
    */
   toolMiddleware?: ToolMiddleware[];
+  /** Optional todo store. When provided, enables the TodoManager feature. */
+  todoStore?: TodoStore;
 }
 
 /**
@@ -68,6 +73,7 @@ export class DoughAgent {
   private threadManager: ThreadManager;
   private mcpManager: McpManager;
   private skillManager: SkillManager;
+  private todoManager: TodoManager | null = null;
   private config: DoughAgentConfig;
   private agentsContext: string | null = null;
   private agentsContextPromise: Promise<string> | null = null;
@@ -129,6 +135,30 @@ export class DoughAgent {
     this.skillManager = new SkillManager(config.cwd);
     if (config.loadSkills !== false) {
       this.skillsDiscoveryPromise = this.skillManager.discover().then(() => {});
+    }
+
+    // Set up todos if a store is provided
+    if (config.todoStore) {
+      const verifier = new TodoVerifier(this.provider);
+      this.todoManager = new TodoManager(config.todoStore, verifier);
+
+      // Register the todos MCP server so the LLM can call TodoWrite/TodoRead/TodoComplete.
+      // The server script is co-located in this package; env vars pass the db path.
+      // Session ID is "default" at agent level; the WS handler overrides it per-connection
+      // by re-registering with the real session ID when one is established.
+      const mcpServerPath = import.meta.dirname + "/todos/mcp-server.ts";
+      // Derive the db path from the store if it's a SqliteTodoStore (has a dbPath prop)
+      const dbPath =
+        (config.todoStore as unknown as { dbPath?: string }).dbPath ?? "";
+      this.mcpManager.add("dough_todos", {
+        transport: "stdio",
+        command: "bun",
+        args: ["run", mcpServerPath],
+        env: {
+          ...(dbPath ? { DOUGH_TODOS_DB: dbPath } : {}),
+          DOUGH_TODO_SESSION: "default",
+        },
+      });
     }
 
     // Start loading AGENTS.md in the background.
@@ -228,6 +258,10 @@ export class DoughAgent {
 
   getSkillManager(): SkillManager {
     return this.skillManager;
+  }
+
+  getTodoManager(): TodoManager | null {
+    return this.todoManager;
   }
 
   getCwd(): string {

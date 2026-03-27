@@ -20,3 +20,5 @@ export {
   appendAttributionTrailer,
   createAttributionMiddleware,
 } from "./git-attribution.ts";
+export { TodoManager, TodoVerifier, MemoryTodoStore, SqliteTodoStore } from "./todos/index.ts";
+export type { TodoStore, CompleteResult, VerificationResult } from "./todos/index.ts";

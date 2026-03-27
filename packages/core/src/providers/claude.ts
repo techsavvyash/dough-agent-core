@@ -1,5 +1,6 @@
 import { DoughEventType } from "@dough/protocol";
 import type {
+  Attachment,
   DoughEvent,
   UsageMetadata,
   McpServerMap,
@@ -12,12 +13,25 @@ import {
   listSessions,
   forkSession,
   type SDKMessage,
+  type SDKUserMessage,
   type Options,
   type HookCallbackMatcher,
   type HookEvent,
   type HookInput,
   type PreToolUseHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
+// ImageBlockParam and TextBlockParam are part of @anthropic-ai/sdk which the
+// claude-agent-sdk bundles. We define minimal inline types to avoid a direct
+// import path that may not resolve in all environments.
+type ImageBlockParam = {
+  type: "image";
+  source: {
+    type: "base64";
+    media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+    data: string;
+  };
+};
+type TextBlockParam = { type: "text"; text: string };
 import type { ToolMiddleware } from "./provider.ts";
 
 export interface ClaudeProviderConfig {
@@ -121,6 +135,13 @@ export class ClaudeProvider implements LLMProvider {
     let gotStreamDeltas = false;
     let lastUsage: UsageMetadata = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
+    // Build the prompt: plain string, or AsyncIterable<SDKUserMessage> for multimodal
+    const promptValue = buildPrompt(
+      lastUserMessage.content,
+      options.attachments,
+      this.activeSessionId
+    );
+
     // Attempt the query — may need to retry without `resume` if the
     // provider-native session JSONL was deleted (server restart, cleanup, etc.)
     let retried = false;
@@ -131,7 +152,7 @@ export class ClaudeProvider implements LLMProvider {
     ): AsyncGenerator<DoughEvent> {
       try {
         const q = query({
-          prompt: lastUserMessage.content,
+          prompt: promptValue,
           options: opts,
         });
 
@@ -478,6 +499,51 @@ function toolMiddlewareToHooks(
 /**
  * Create an AbortController that aborts when the given signal aborts.
  */
+/**
+ * Build the `prompt` value for query().
+ *
+ * • Plain text prompt → string (fast path, no overhead)
+ * • Prompt + image attachments → AsyncIterable<SDKUserMessage> with a
+ *   multimodal content array: [image blocks…, text block]
+ *
+ * The SDKUserMessage `session_id` is the active Claude session UUID (or a
+ * fresh UUID when starting a new session). The SDK uses it for JSONL bookkeeping.
+ */
+function buildPrompt(
+  text: string,
+  attachments: Attachment[] | undefined,
+  activeSessionId: string | null
+): string | AsyncIterable<SDKUserMessage> {
+  if (!attachments || attachments.length === 0) return text;
+
+  const content: (ImageBlockParam | TextBlockParam)[] = [
+    ...attachments.map(
+      (a): ImageBlockParam => ({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: a.mimeType,
+          data: a.data,
+        },
+      })
+    ),
+    { type: "text", text },
+  ];
+
+  const sessionId = activeSessionId ?? crypto.randomUUID();
+
+  async function* makeStream(): AsyncIterable<SDKUserMessage> {
+    yield {
+      type: "user",
+      message: { role: "user", content },
+      parent_tool_use_id: null,
+      session_id: sessionId,
+    } as SDKUserMessage;
+  }
+
+  return makeStream();
+}
+
 function abortControllerFromSignal(signal: AbortSignal): AbortController {
   const controller = new AbortController();
   if (signal.aborted) {

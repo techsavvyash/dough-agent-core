@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { DoughEventType } from "@dough/protocol";
-import type { DoughEvent, SessionMeta, HistoricalMessage } from "@dough/protocol";
+import type { Attachment, DoughEvent, SessionMeta, HistoricalMessage } from "@dough/protocol";
 import type { DoughClient } from "../client.ts";
 
 export interface ToolCallEntry {
@@ -275,18 +275,21 @@ export function useSession(client: DoughClient) {
   }, [client]);
 
   const send = useCallback(
-    (prompt: string) => {
+    (prompt: string, attachments?: Attachment[]) => {
+      const attachmentSuffix = attachments?.length
+        ? `\n${attachments.map((a) => `📎 ${a.name ?? "image"}`).join("  ")}`
+        : "";
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "user",
-          content: prompt,
+          content: prompt + attachmentSuffix,
           timestamp: new Date().toISOString(),
         },
       ]);
       setError(null);
-      client.send(prompt);
+      client.send(prompt, undefined, attachments);
     },
     [client]
   );

@@ -55,6 +55,7 @@ function buildMockAgent(sessionId: string, threadId: string) {
       activate: async () => null,
     }),
     getCwd: () => "/tmp",
+    getTodoManager: () => null,
   } as unknown as import("@dough/core").DoughAgent;
 }
 
@@ -91,8 +92,9 @@ function startServer(sessionId: string, threadId: string): number {
             sessionId: null,
             session: null,
             fileTracker: new FileTracker(),
-            sendQueue: [],
+            sendQueue: [] as { prompt: string; attachments?: import("@dough/protocol").Attachment[] }[],
             isProcessingQueue: false,
+            pendingManualVerifications: new Map(),
           } satisfies WSData,
         });
         return ok ? undefined : new Response("upgrade failed", { status: 500 });

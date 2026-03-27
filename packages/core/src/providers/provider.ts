@@ -1,4 +1,4 @@
-import type { DoughEvent, McpServerMap, McpServerStatus } from "@dough/protocol";
+import type { Attachment, DoughEvent, McpServerMap, McpServerStatus } from "@dough/protocol";
 import type { ThreadMessage } from "@dough/threads";
 
 /**
@@ -43,6 +43,11 @@ export interface SendOptions {
    * chained as input to the next (they run independently).
    */
   toolMiddleware?: ToolMiddleware[];
+  /**
+   * Optional image attachments to include with the user message.
+   * Each provider maps these to its native multimodal format.
+   */
+  attachments?: Attachment[];
 }
 
 /**
