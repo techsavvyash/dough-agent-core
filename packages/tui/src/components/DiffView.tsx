@@ -36,6 +36,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("sidebar");
   const [sidebarScrollTop, setSidebarScrollTop] = useState(0);
+  const [diffScrollTop, setDiffScrollTop] = useState(0);
   const { diffs, stats } = payload;
 
   // Header rule+stat+rule = 3, footer rule = 1, sidebar bottom stats row = 1
@@ -60,12 +61,14 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
       // j/k/↑/↓ only navigate files when the sidebar owns focus.
       // When the diff panel is focused, <diff focused> handles scrolling natively.
       if (key.name === "up" || key.name === "k") {
+        setDiffScrollTop(0);
         setSelectedFileIndex((i: number) => {
           const next = i > 0 ? i - 1 : diffs.length - 1;
           setSidebarScrollTop((st) => adjustScrollFlat(next, st, sidebarViewport));
           return next;
         });
       } else if (key.name === "down" || key.name === "j") {
+        setDiffScrollTop(0);
         setSelectedFileIndex((i: number) => {
           const next = i < diffs.length - 1 ? i + 1 : 0;
           setSidebarScrollTop((st) => adjustScrollFlat(next, st, sidebarViewport));
@@ -78,8 +81,12 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
         if (sidebarVisible) setFocusedPanel("diff");
       }
     } else {
-      // diff panel focused — still allow global shortcuts
-      if (key.name === "s") {
+      // diff panel focused — j/k scroll the diff content via controlled scrollbox
+      if (key.name === "up" || key.name === "k") {
+        setDiffScrollTop((t) => Math.max(0, t - 3));
+      } else if (key.name === "down" || key.name === "j") {
+        setDiffScrollTop((t) => t + 3);
+      } else if (key.name === "s") {
         setViewMode((m: ViewMode) => (m === "split" ? "unified" : "split"));
       } else if (key.name === "b") {
         setSidebarVisible((v: boolean) => !v);
@@ -162,7 +169,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
             )}
           </box>
 
-          {/* Native diff renderer — when focused it handles j/k/↑/↓ scrolling natively */}
+          {/* <diff> is a virtualized native element — scrollTop must be passed directly */}
           <diff
             flex={1}
             diff={sel.unifiedDiff}
@@ -172,7 +179,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
             treeSitterClient={treeSitterClient}
             showLineNumbers={true}
             wrapMode="word"
-            focused={focusedPanel === "diff"}
+            scrollTop={diffScrollTop}
             fg={colors.text}
             addedBg="#162816"
             removedBg="#281618"

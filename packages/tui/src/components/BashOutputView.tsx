@@ -46,6 +46,7 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
     // Start scrolled to the last item
     Math.max(0, calls.length - 1)
   );
+  const [outputScrollTop, setOutputScrollTop] = useState(0);
 
   // Header rule+stat+rule = 3, footer rule = 1, sidebar index indicator = 1
   const SIDEBAR_CHROME = 5;
@@ -63,12 +64,14 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
       // j/k/↑/↓ navigate commands when sidebar owns focus.
       // When output is focused, <scrollbox focused> scrolls natively.
       if (key.name === "up" || key.name === "k") {
+        setOutputScrollTop(0);
         setSelectedIndex((i) => {
           const next = i > 0 ? i - 1 : calls.length - 1;
           setSidebarScrollTop((st) => adjustScrollFlat(next, st, sidebarViewport));
           return next;
         });
       } else if (key.name === "down" || key.name === "j") {
+        setOutputScrollTop(0);
         setSelectedIndex((i) => {
           const next = i < calls.length - 1 ? i + 1 : 0;
           setSidebarScrollTop((st) => adjustScrollFlat(next, st, sidebarViewport));
@@ -79,8 +82,12 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
         if (sidebarVisible) setFocusedPanel("output");
       }
     } else {
-      // output panel focused — still allow sidebar toggle
-      if (key.name === "b") {
+      // output panel focused — j/k scroll via controlled scrollbox
+      if (key.name === "up" || key.name === "k") {
+        setOutputScrollTop((t) => Math.max(0, t - 3));
+      } else if (key.name === "down" || key.name === "j") {
+        setOutputScrollTop((t) => t + 3);
+      } else if (key.name === "b") {
         setSidebarVisible((v) => !v);
       }
     }
@@ -200,13 +207,11 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
           )}
           <box height={1}><text fg={colors.border}>{hrule(width)}</text></box>
 
-          {/* Scrollable output — focused lets it handle j/k/↑/↓ natively */}
-          {/* key resets scroll position whenever the selected command changes */}
+          {/* Scrollable output — scrollTop is controlled; j/k are handled in useKeyboard */}
           <scrollbox
             flex={1}
             paddingX={2}
-            focused={focusedPanel === "output"}
-            key={sel?.callId}
+            scrollTop={outputScrollTop}
           >
             {sel ? (
               sel.output ? (
