@@ -30,7 +30,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {thought && (
           <box paddingX={1} flexDirection="column" marginBottom={1}>
             <box flexDirection="row">
-              <text fg={colors.primary}>{symbols.thought} </text>
+              <box width={2} flexShrink={0}>
+                <text fg={colors.primary}>{symbols.thought}</text>
+              </box>
               <text fg={colors.textMuted} flex={1} wrapMode="word">
                 {(() => {
                   const lines = thought
@@ -58,7 +60,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {/* Main content — native markdown renderer */}
         {hasContent && (
           <box flexDirection="row" paddingX={1}>
-            <text fg={colors.primary}>{symbols.assistantPrefix} </text>
+            <box width={2} flexShrink={0}>
+              <text fg={colors.primary}>{symbols.assistantPrefix}</text>
+            </box>
             <box flex={1} flexDirection="column">
               <markdown
                 content={content + cursor}
@@ -75,7 +79,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {/* Streaming cursor with no content yet */}
         {!hasContent && isStreaming && !thought && (!toolCalls || toolCalls.length === 0) && (
           <box flexDirection="row" paddingX={1}>
-            <text fg={colors.primary}>{symbols.assistantPrefix} </text>
+            <box width={2} flexShrink={0}>
+              <text fg={colors.primary}>{symbols.assistantPrefix}</text>
+            </box>
             <text fg={colors.warning}>{cursor}</text>
           </box>
         )}

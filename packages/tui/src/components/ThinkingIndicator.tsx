@@ -26,8 +26,12 @@ export function ThinkingIndicator({
 
   return (
     <box height={1} paddingX={1} flexDirection="row">
-      <text fg={colors.primary}>{symbols.assistantPrefix} </text>
-      <text fg={colors.warning}>{spinner} </text>
+      <box width={2} flexShrink={0}>
+        <text fg={colors.primary}>{symbols.assistantPrefix}</text>
+      </box>
+      <box width={2} flexShrink={0}>
+        <text fg={colors.warning}>{spinner}</text>
+      </box>
       <text fg={colors.textDim}>{label}</text>
     </box>
   );

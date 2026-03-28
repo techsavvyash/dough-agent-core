@@ -16,7 +16,7 @@ export function ChatView({ messages, isStreaming }: ChatViewProps) {
     messages.length > 0;
 
   return (
-    <box flexDirection="column" gap={2} paddingY={1} paddingX={2}>
+    <box flexDirection="column" gap={1} paddingY={1}>
       {messages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} />
       ))}
