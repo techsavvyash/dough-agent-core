@@ -12,8 +12,12 @@ export function ToolCallView({ toolCall }: ToolCallViewProps) {
   const iconColor = statusColor(status);
   const label = formatToolName(name);
 
-  // Format key args as a compact summary
-  const argSummary = formatArgs(name, args);
+  // For Bash/execute: show the full command in a code block instead of inline summary
+  const isBash = name === "Bash" || name === "bash" || name === "execute";
+  const bashCommand = isBash && args.command ? String(args.command) : null;
+
+  // For non-Bash tools: compact inline arg summary
+  const argSummary = bashCommand ? null : formatArgs(name, args);
 
   return (
     <box
@@ -24,14 +28,24 @@ export function ToolCallView({ toolCall }: ToolCallViewProps) {
       borderStyle="single"
       borderColor={iconColor}
     >
+      {/* Header row: icon + tool name + optional inline arg */}
       <box height={1} flexDirection="row">
         <text fg={iconColor}>{icon} </text>
         <text fg={colors.textDim}>{label}</text>
         {argSummary ? <text fg={colors.textMuted}> {argSummary}</text> : null}
       </box>
+
+      {/* Bash command: full text in an indented code block */}
+      {bashCommand && (
+        <box paddingLeft={2} paddingTop={0}>
+          <text fg={colors.textDim} wrapMode="word">{bashCommand}</text>
+        </box>
+      )}
+
+      {/* Error output */}
       {status === "error" && result != null && (
-        <box paddingLeft={1} height={1}>
-          <text fg={colors.error}>{String(result).slice(0, 120)}</text>
+        <box paddingLeft={1}>
+          <text fg={colors.error} wrapMode="word">{String(result).slice(0, 300)}</text>
         </box>
       )}
     </box>
@@ -82,24 +96,20 @@ function formatToolName(name: string): string {
   return labels[name] ?? name;
 }
 
-/** Format tool args into a compact one-line summary */
+/** Format tool args into a compact one-line summary (used for non-Bash tools) */
 function formatArgs(name: string, args: Record<string, unknown>): string {
-  // File operations — show the path
+  // File operations — show last two path segments for context
   if (args.file_path || args.path || args.filePath) {
     const p = String(args.file_path ?? args.path ?? args.filePath);
-    const short = p.split("/").pop() ?? p;
-    return short;
-  }
-
-  // Bash/execute — show the command
-  if (args.command) {
-    const cmd = String(args.command);
-    return cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
+    const parts = p.split("/").filter(Boolean);
+    const short = parts.slice(-2).join("/");
+    return short || p;
   }
 
   // Search — show pattern
   if (args.pattern || args.query) {
-    return String(args.pattern ?? args.query);
+    const pat = String(args.pattern ?? args.query);
+    return pat.length > 80 ? pat.slice(0, 77) + "…" : pat;
   }
 
   return "";

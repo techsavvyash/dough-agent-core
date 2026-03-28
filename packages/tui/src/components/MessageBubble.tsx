@@ -26,16 +26,23 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
     return (
       <box flexDirection="column">
-        {/* Thought block — single truncated line, dimmed above the response */}
+        {/* Thought block — up to 3 lines, dimmed above the response */}
         {thought && (
-          <box paddingX={1} flexDirection="row" marginBottom={1}>
-            <text fg={colors.primary}>{symbols.thought} </text>
-            <text fg={colors.textMuted} flex={1}>
-              {(() => {
-                const firstLine = thought.split("\n").find((l) => l.trim().length > 0) ?? thought;
-                return firstLine.length > 100 ? firstLine.slice(0, 100) + "…" : firstLine;
-              })()}
-            </text>
+          <box paddingX={1} flexDirection="column" marginBottom={1}>
+            <box flexDirection="row">
+              <text fg={colors.primary}>{symbols.thought} </text>
+              <text fg={colors.textMuted} flex={1} wrapMode="word">
+                {(() => {
+                  const lines = thought
+                    .split("\n")
+                    .map((l) => l.trim())
+                    .filter((l) => l.length > 0)
+                    .slice(0, 3);
+                  const joined = lines.join(" ");
+                  return joined.length > 300 ? joined.slice(0, 300) + "…" : joined;
+                })()}
+              </text>
+            </box>
           </box>
         )}
 
