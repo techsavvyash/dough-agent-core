@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { getTreeSitterClient } from "@opentui/core";
 import type { DiffPayload, FileDiff } from "@dough/protocol";
@@ -28,6 +28,12 @@ interface DiffViewProps {
  *   s          — toggle split ↔ unified
  *   b          — toggle sidebar visibility
  *   Esc / ^D   — close
+ *
+ * Scroll implementation note:
+ *   The <diff> element is virtualised — it has no scrollTop prop. Scrolling
+ *   is performed imperatively via diffRef.current.leftCodeRenderable.scrollY
+ *   (and rightCodeRenderable for split view). TypeScript `private` is
+ *   compile-time only; at runtime those fields are plain JS properties.
  */
 export function DiffView({ payload, onClose }: DiffViewProps) {
   const { width, height } = useTerminalDimensions();
@@ -36,8 +42,11 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("sidebar");
   const [sidebarScrollTop, setSidebarScrollTop] = useState(0);
-  const [diffScrollTop, setDiffScrollTop] = useState(0);
   const { diffs, stats } = payload;
+
+  // Ref to the native <diff> renderable — used for imperative scrolling.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const diffRef = useRef<any>(null);
 
   // Header rule+stat+rule = 3, footer rule = 1, sidebar bottom stats row = 1
   const SIDEBAR_CHROME = 5;
@@ -46,6 +55,38 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
   // Singletons — stable across re-renders
   const syntaxStyle = useMemo(() => getDoughSyntaxStyle(), []);
   const treeSitterClient = useMemo(() => getTreeSitterClient(), []);
+
+  /** Imperatively scroll the diff panel by `delta` lines. */
+  function scrollDiff(delta: number) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const el: any = diffRef.current;
+    if (!el) return;
+    const left = el.leftCodeRenderable;
+    if (left) {
+      const next = Math.max(0, left.scrollY + delta);
+      left.scrollY = next;
+    }
+    const right = el.rightCodeRenderable;
+    if (right) {
+      const next = Math.max(0, right.scrollY + delta);
+      right.scrollY = next;
+    }
+  }
+
+  /** Reset the diff scroll to the top (called when switching files). */
+  function resetDiffScroll() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const el: any = diffRef.current;
+    if (!el) return;
+    if (el.leftCodeRenderable) el.leftCodeRenderable.scrollY = 0;
+    if (el.rightCodeRenderable) el.rightCodeRenderable.scrollY = 0;
+  }
+
+  // Also reset imperatively after React re-renders with the new file content.
+  useEffect(() => {
+    resetDiffScroll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFileIndex]);
 
   useKeyboard((key) => {
     if (key.name === "escape" || (key.ctrl && key.name === "d")) {
@@ -59,16 +100,15 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
       setFocusedPanel("diff");
     } else if (focusedPanel === "sidebar") {
       // j/k/↑/↓ only navigate files when the sidebar owns focus.
-      // When the diff panel is focused, <diff focused> handles scrolling natively.
       if (key.name === "up" || key.name === "k") {
-        setDiffScrollTop(0);
+        resetDiffScroll();
         setSelectedFileIndex((i: number) => {
           const next = i > 0 ? i - 1 : diffs.length - 1;
           setSidebarScrollTop((st) => adjustScrollFlat(next, st, sidebarViewport));
           return next;
         });
       } else if (key.name === "down" || key.name === "j") {
-        setDiffScrollTop(0);
+        resetDiffScroll();
         setSelectedFileIndex((i: number) => {
           const next = i < diffs.length - 1 ? i + 1 : 0;
           setSidebarScrollTop((st) => adjustScrollFlat(next, st, sidebarViewport));
@@ -81,11 +121,11 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
         if (sidebarVisible) setFocusedPanel("diff");
       }
     } else {
-      // diff panel focused — j/k scroll the diff content via controlled scrollbox
+      // diff panel focused — j/k scroll the diff content imperatively via ref
       if (key.name === "up" || key.name === "k") {
-        setDiffScrollTop((t) => Math.max(0, t - 3));
+        scrollDiff(-3);
       } else if (key.name === "down" || key.name === "j") {
-        setDiffScrollTop((t) => t + 3);
+        scrollDiff(3);
       } else if (key.name === "s") {
         setViewMode((m: ViewMode) => (m === "split" ? "unified" : "split"));
       } else if (key.name === "b") {
@@ -157,7 +197,9 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
           </box>
         )}
 
-        {/* Diff panel — native <diff> with tree-sitter syntax highlighting */}
+        {/* Diff panel — native <diff> with tree-sitter syntax highlighting.
+            Scroll is controlled imperatively via diffRef (see scrollDiff / resetDiffScroll).
+            The <diff> element is virtualised and has no scrollTop prop. */}
         <box flex={1} flexDirection="column" borderFg={focusedPanel === "diff" ? colors.accent : colors.border}>
           {/* File path + language tag */}
           <box height={1} paddingX={1} flexDirection="row">
@@ -169,8 +211,9 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
             )}
           </box>
 
-          {/* <diff> is a virtualized native element — scrollTop must be passed directly */}
+          {/* <diff> is a virtualised native element — scroll is imperative via ref */}
           <diff
+            ref={diffRef}
             flex={1}
             diff={sel.unifiedDiff}
             filetype={sel.language}
@@ -179,7 +222,6 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
             treeSitterClient={treeSitterClient}
             showLineNumbers={true}
             wrapMode="word"
-            scrollTop={diffScrollTop}
             fg={colors.text}
             addedBg="#162816"
             removedBg="#281618"
