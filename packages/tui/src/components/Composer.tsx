@@ -43,8 +43,14 @@ export function Composer({
   hasChanges,
 }: ComposerProps) {
   const inputRef = useRef<TextareaRenderable>(null);
+  const mountedRef = useRef(true);
   const { width } = useTerminalDimensions();
   const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [pasteStatus, setPasteStatus] = useState<string | null>(null);
   const [inputLines, setInputLines] = useState(1);
@@ -61,7 +67,7 @@ export function Composer({
   useKeyboard((_key) => {
     // Recompute visual line count after every keystroke as a reliable fallback
     // for when onContentChange fires before the buffer has been fully updated.
-    setTimeout(updateInputLines, 0);
+    setTimeout(() => { if (mountedRef.current) updateInputLines(); }, 0);
 
     const key = _key;
     if (key.name === "escape" && isStreaming) {
@@ -74,7 +80,8 @@ export function Composer({
         // Use setTimeout so the clear runs after the textarea's own key-insert
         // handler — otherwise the "?" lands in the buffer after our setText("").
         setTimeout(() => {
-          inputRef.current?.editBuffer.setText("");
+          if (!mountedRef.current) return;
+          try { inputRef.current?.editBuffer.setText(""); } catch { /* destroyed */ }
           setInputLines(1);
         }, 0);
         onOpenPalette();
@@ -110,7 +117,9 @@ export function Composer({
   // We must account for word-wrap: a single long logical line takes multiple
   // visual rows. Available width = terminal - paddingX(1+1) - prefix box(2).
   const updateInputLines = useCallback(() => {
-    const text = inputRef.current?.editBuffer.getText() ?? "";
+    if (!mountedRef.current) return;
+    let text = "";
+    try { text = inputRef.current?.editBuffer.getText() ?? ""; } catch { return; }
     const availableWidth = Math.max(1, width - 4);
     const visualCount = text.split("\n").reduce((sum, line) => {
       return sum + Math.max(1, Math.ceil(line.length / availableWidth));
