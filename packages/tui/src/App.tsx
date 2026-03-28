@@ -318,6 +318,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
         queuedCount={queuedCount}
         onAbort={abort}
         onOpenPalette={() => setShowPalette(true)}
+        paletteOpen={showPalette}
         stats={stats}
         hasChanges={hasChanges}
       />

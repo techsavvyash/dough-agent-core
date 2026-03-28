@@ -81,7 +81,7 @@ describe("Composer", () => {
         stats={fileStats}
         hasChanges={true}
       />,
-      { width: 80, height: 10 }
+      { width: 120, height: 10 }
     );
     await renderOnce();
     const frame = captureCharFrame();

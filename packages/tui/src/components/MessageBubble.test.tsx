@@ -121,16 +121,16 @@ describe("MessageBubble", () => {
     await renderOnce();
     const frame = captureCharFrame();
 
-    // Tool names shown
+    // Non-bash tool label shown; bash uses "$ command" style (no label)
     expect(frame).toContain("Read");
-    expect(frame).toContain("Run");
     // File path arg
     expect(frame).toContain("index.ts");
     // Command arg
     expect(frame).toContain("bun test");
-    // Status icons
+    // Status icon for non-bash tool (read_file success)
     expect(frame).toContain("✓");
-    expect(frame).toContain("⋯");
+    // Bash tool renders as "$ command" — no status icon, but command is shown
+    expect(frame).toContain("$");
   });
 
   test("renders tool error with result", async () => {
@@ -154,7 +154,8 @@ describe("MessageBubble", () => {
     await renderOnce();
     const frame = captureCharFrame();
 
-    expect(frame).toContain("✗");
+    // Bash errors render as "$ command" + error output below — no "✗" icon for bash
+    expect(frame).toContain("$");
     expect(frame).toContain("Command not found");
   });
 });

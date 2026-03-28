@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState, useEffect } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
-import type { InputRenderable } from "@opentui/core";
+import type { TextareaRenderable } from "@opentui/core";
 import type { Attachment, ChangeStats } from "@dough/protocol";
 import { colors, symbols, hrule } from "../theme.ts";
 import { pasteImageFromClipboard } from "../hooks/useClipboard.ts";
@@ -11,6 +11,7 @@ interface ComposerProps {
   queuedCount: number;
   onAbort: () => void;
   onOpenPalette?: () => void;
+  paletteOpen?: boolean;
   stats: ChangeStats;
   hasChanges: boolean;
 }
@@ -22,20 +23,31 @@ function formatElapsed(seconds: number): string {
   return `${s}s`;
 }
 
+// Enter → submit, Shift+Enter → newline
+const KEY_BINDINGS = [
+  { name: "return", action: "submit" as const },
+  { name: "return", shift: true, action: "newline" as const },
+];
+
+// Cap before we eat the whole screen; beyond this the textarea scrolls internally
+const MAX_COMPOSER_LINES = 16;
+
 export function Composer({
   onSubmit,
   isStreaming,
   queuedCount,
   onAbort,
   onOpenPalette,
+  paletteOpen = false,
   stats,
   hasChanges,
 }: ComposerProps) {
-  const inputRef = useRef<InputRenderable>(null);
+  const inputRef = useRef<TextareaRenderable>(null);
   const { width } = useTerminalDimensions();
   const [elapsed, setElapsed] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [pasteStatus, setPasteStatus] = useState<string | null>(null);
+  const [inputLines, setInputLines] = useState(1);
 
   useEffect(() => {
     if (!isStreaming) {
@@ -46,15 +58,25 @@ export function Composer({
     return () => clearInterval(id);
   }, [isStreaming]);
 
-  useKeyboard((key) => {
+  useKeyboard((_key) => {
+    // Recompute visual line count after every keystroke as a reliable fallback
+    // for when onContentChange fires before the buffer has been fully updated.
+    setTimeout(updateInputLines, 0);
+
+    const key = _key;
     if (key.name === "escape" && isStreaming) {
       onAbort();
       return;
     }
-    if (key.sequence === "?" && !isStreaming && onOpenPalette) {
-      const currentValue = inputRef.current?.value ?? "";
+    if (key.sequence === "?" && !isStreaming && !paletteOpen && onOpenPalette) {
+      const currentValue = inputRef.current?.editBuffer.getText() ?? "";
       if (currentValue === "" || currentValue === "?") {
-        if (inputRef.current) inputRef.current.value = "";
+        // Use setTimeout so the clear runs after the textarea's own key-insert
+        // handler — otherwise the "?" lands in the buffer after our setText("").
+        setTimeout(() => {
+          inputRef.current?.editBuffer.setText("");
+          setInputLines(1);
+        }, 0);
         onOpenPalette();
       }
     }
@@ -73,19 +95,32 @@ export function Composer({
     }
   });
 
-  const handleSubmit = useCallback(
-    (value: string) => {
-      const trimmed = value.trim();
-      if (!trimmed && pendingAttachments.length === 0) return;
-      // Allow submission while streaming — the server will queue it.
-      onSubmit(trimmed, pendingAttachments.length > 0 ? pendingAttachments : undefined);
-      setPendingAttachments([]);
-      if (inputRef.current) {
-        inputRef.current.value = "";
-      }
-    },
-    [onSubmit, pendingAttachments]
-  );
+  const handleSubmit = useCallback(() => {
+    const raw = inputRef.current?.editBuffer.getText() ?? "";
+    const trimmed = raw.trim();
+    if (!trimmed && pendingAttachments.length === 0) return;
+    // Allow submission while streaming — the server will queue it.
+    onSubmit(trimmed, pendingAttachments.length > 0 ? pendingAttachments : undefined);
+    setPendingAttachments([]);
+    inputRef.current?.editBuffer.setText("");
+    setInputLines(1);
+  }, [onSubmit, pendingAttachments]);
+
+  // Track visual line count for dynamic composer height.
+  // We must account for word-wrap: a single long logical line takes multiple
+  // visual rows. Available width = terminal - paddingX(1+1) - prefix box(2).
+  const updateInputLines = useCallback(() => {
+    const text = inputRef.current?.editBuffer.getText() ?? "";
+    const availableWidth = Math.max(1, width - 4);
+    const visualCount = text.split("\n").reduce((sum, line) => {
+      return sum + Math.max(1, Math.ceil(line.length / availableWidth));
+    }, 0);
+    setInputLines(Math.min(MAX_COMPOSER_LINES, Math.max(1, visualCount)));
+  }, [width]);
+
+  const handleContentChange = useCallback(() => {
+    updateInputLines();
+  }, [updateInputLines]);
 
   // ── Build top border with thinking indicator ───────────
   const timer =
@@ -100,9 +135,9 @@ export function Composer({
       )}`
     : hrule(width);
 
-  // ── Placeholder is always the normal prompt ────────────
-  const placeholder = `${symbols.userPrefix} Type a message...`;
-  const prefixColor = colors.primary;
+  // ── Placeholder text (prefix rendered separately so it never disappears) ──
+  const placeholder = "Type a message...";
+  const prefixColor = colors.textDim;
 
   // ── Build footer parts ─────────────────────────────────
   const footerParts: string[] = [];
@@ -112,6 +147,7 @@ export function Composer({
   } else {
     footerParts.push("? commands");
     footerParts.push("Ctrl+V image");
+    footerParts.push("Shift+Enter newline");
   }
   if (queuedCount > 0) {
     const label = queuedCount === 1 ? "message" : "messages";
@@ -144,22 +180,33 @@ export function Composer({
     ? `${footerLeft}${" ".repeat(footerGap)}${footerRight}`
     : footerLeft;
 
+  // Grows with content up to MAX_COMPOSER_LINES, then scrolls internally
+  const visibleLines = Math.min(MAX_COMPOSER_LINES, inputLines);
+  // Total composer height = separator(1) + visible input rows + footer(1)
+  const composerHeight = 2 + visibleLines;
+
   return (
-    <box flexDirection="column" height={3}>
+    <box flexDirection="column" height={composerHeight}>
       {/* Top separator — embeds thinking indicator on the left when streaming */}
       <box height={1}>
         <text fg={isStreaming ? colors.warning : colors.border}>{topBorder}</text>
       </box>
 
-      {/* Input area */}
-      <box paddingX={1} height={1}>
-        <input
+      {/* Input area — prefix is permanent, textarea shows MIN_VISIBLE_LINES rows minimum */}
+      <box paddingX={1} height={visibleLines} flexDirection="row">
+        <box width={2} flexShrink={0}>
+          <text fg={colors.primary}>{symbols.userPrefix}</text>
+        </box>
+        <textarea
           ref={inputRef}
-          focused
+          focused={!paletteOpen}
           placeholder={placeholder}
-          onSubmit={(v: unknown) => handleSubmit(String(v))}
+          onSubmit={handleSubmit}
+          onContentChange={handleContentChange}
           textColor={colors.text}
           placeholderColor={prefixColor}
+          keyBindings={KEY_BINDINGS}
+          wrapMode="word"
         />
       </box>
 
