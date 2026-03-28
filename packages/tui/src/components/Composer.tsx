@@ -23,10 +23,11 @@ function formatElapsed(seconds: number): string {
   return `${s}s`;
 }
 
-// Enter → submit, Shift+Enter → newline
+// Shift+Enter must come first — OpenTUI matches bindings in order,
+// so the more specific modifier check must precede the plain Enter catch-all.
 const KEY_BINDINGS = [
-  { name: "return", action: "submit" as const },
   { name: "return", shift: true, action: "newline" as const },
+  { name: "return", action: "submit" as const },
 ];
 
 // Cap before we eat the whole screen; beyond this the textarea scrolls internally
