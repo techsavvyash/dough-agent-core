@@ -346,20 +346,21 @@ describe("DiffView", () => {
     );
     await renderOnce();
 
-    // Move focus to diff panel
+    // Move focus to diff panel — <diff focused> handles its own scrolling
     act(() => { mockInput.pressKey("l"); });
     await renderOnce();
 
-    // Press j — should scroll diff, not switch file
+    // Press j — the sidebar's file selection must not change
     act(() => { mockInput.pressKey("j"); });
     await renderOnce();
     const frame = captureCharFrame();
 
-    // First file should still be selected (▶ still on index.ts row, utils.ts not in diff header)
-    // The diff panel header still shows the first file
+    // First file should still be selected — diff panel header still shows index.ts
     expect(frame).toContain("src/index.ts");
-    // Selection indicator (▶) is still on the first file in the sidebar
+    // ▶ cursor stays on first file in sidebar
     expect(frame).toContain("▶");
+    // Hint reflects that j/k now scroll the diff (not navigate files)
+    expect(frame).toContain("scroll diff");
   });
 
   test("pressing b while sidebar focused shifts focus to diff automatically", async () => {
