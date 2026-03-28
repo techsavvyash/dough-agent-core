@@ -35,7 +35,7 @@ export function ThreadViewer({
   onClose,
   onSwitch,
 }: ThreadViewerProps) {
-  const { width } = useTerminalDimensions();
+  const { width, height } = useTerminalDimensions();
   const [showDetail, setShowDetail] = useState(false);
   const [switching, setSwitching] = useState<string | null>(null);
 
@@ -48,11 +48,18 @@ export function ThreadViewer({
     return first >= 0 ? first : 0;
   });
 
+  // Controlled scroll offset for the thread list
+  const [scrollTop, setScrollTop] = useState(0);
+
   // Only thread items are navigable
   const navigable = items.filter((it): it is Extract<ListItem, { kind: "thread" }> => it.kind === "thread");
   const selectedItem = items[selectedIndex];
   const selectedThread =
     selectedItem?.kind === "thread" ? selectedItem.node.thread : null;
+
+  // Header (rule + stat + rule) = 3 rows, footer (rule + legend) = 2 rows
+  const CHROME_ROWS = 5;
+  const viewportHeight = Math.max(1, height - CHROME_ROWS);
 
   useKeyboard((key) => {
     if (key.name === "escape") {
@@ -62,17 +69,21 @@ export function ThreadViewer({
         onClose();
       }
     } else if (key.name === "up" || key.name === "k") {
-      // Skip over session headers when navigating
+      // Skip over session headers when navigating upward, then auto-scroll
       setSelectedIndex((i: number) => {
         let next = i - 1;
         while (next >= 0 && items[next]?.kind === "session_header") next--;
-        return next >= 0 ? next : i;
+        if (next < 0) return i;
+        setScrollTop((st) => adjustScroll(next, st, items, viewportHeight));
+        return next;
       });
     } else if (key.name === "down" || key.name === "j") {
       setSelectedIndex((i: number) => {
         let next = i + 1;
         while (next < items.length && items[next]?.kind === "session_header") next++;
-        return next < items.length ? next : i;
+        if (next >= items.length) return i;
+        setScrollTop((st) => adjustScroll(next, st, items, viewportHeight));
+        return next;
       });
     } else if (key.name === "return") {
       if (selectedThread) setShowDetail(!showDetail);
@@ -121,8 +132,8 @@ export function ThreadViewer({
 
       {/* Main content */}
       <box flex={1} flexDirection="row">
-        {/* Thread list with session groups */}
-        <scrollbox flex={1} focused>
+        {/* Thread list with session groups — scroll is controlled programmatically */}
+        <scrollbox flex={1} scrollTop={scrollTop}>
           <box flexDirection="column" paddingX={1}>
             {items.map((item, i) => {
               if (item.kind === "session_header") {
@@ -338,6 +349,37 @@ function DetailRow({ label, value }: { label: string; value: string }) {
       <text fg={colors.text}>{value}</text>
     </box>
   );
+}
+
+// ── Scroll helpers ───────────────────────────────────────────
+
+/**
+ * Compute the visual line offset (from the top of the list) for a given item index.
+ * Session headers have `marginTop={1}` + `height={1}` = 2 visual lines.
+ * Thread rows are always `height={1}` = 1 visual line.
+ */
+function itemLineOffset(index: number, items: ListItem[]): number {
+  let line = 0;
+  for (let i = 0; i < index; i++) {
+    line += items[i]?.kind === "session_header" ? 2 : 1;
+  }
+  return line;
+}
+
+/**
+ * Return a new scrollTop that ensures the item at `targetIndex` is visible
+ * within the viewport. Scrolls minimally — only moves if item is out of view.
+ */
+function adjustScroll(
+  targetIndex: number,
+  currentScrollTop: number,
+  items: ListItem[],
+  viewportHeight: number,
+): number {
+  const line = itemLineOffset(targetIndex, items);
+  if (line < currentScrollTop) return line;
+  if (line >= currentScrollTop + viewportHeight) return line - viewportHeight + 1;
+  return currentScrollTop;
 }
 
 // ── Tree building ────────────────────────────────────────────

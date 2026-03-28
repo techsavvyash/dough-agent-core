@@ -6,6 +6,7 @@ import { colors, hrule } from "../theme.ts";
 import { getDoughSyntaxStyle } from "../utils/syntaxStyle.ts";
 
 type ViewMode = "split" | "unified";
+type FocusedPanel = "sidebar" | "diff";
 
 interface DiffViewProps {
   payload: DiffPayload;
@@ -20,9 +21,12 @@ interface DiffViewProps {
  * automatically. We own the file-list sidebar and the header/footer chrome.
  *
  * Keyboard:
- *   ↑ / k      — previous file
- *   ↓ / j      — next file
+ *   ← / h      — focus file sidebar
+ *   → / l      — focus diff panel
+ *   ↑ / k      — prev file (sidebar focused) | scroll up (diff focused)
+ *   ↓ / j      — next file (sidebar focused) | scroll down (diff focused)
  *   s          — toggle split ↔ unified
+ *   b          — toggle sidebar visibility
  *   Esc / ^D   — close
  */
 export function DiffView({ payload, onClose }: DiffViewProps) {
@@ -30,6 +34,8 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("sidebar");
+  const [diffScrollOffset, setDiffScrollOffset] = useState(0);
   const { diffs, stats } = payload;
 
   // Singletons — stable across re-renders
@@ -39,14 +45,35 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
   useKeyboard((key) => {
     if (key.name === "escape" || (key.ctrl && key.name === "d")) {
       onClose();
+    } else if (key.name === "left" || key.name === "h") {
+      // Move focus to the sidebar (or re-show it if hidden)
+      setSidebarVisible(true);
+      setFocusedPanel("sidebar");
+    } else if (key.name === "right" || key.name === "l") {
+      // Move focus to the diff panel
+      setFocusedPanel("diff");
     } else if (key.name === "up" || key.name === "k") {
-      setSelectedFileIndex((i: number) => (i > 0 ? i - 1 : diffs.length - 1));
+      if (focusedPanel === "sidebar") {
+        setSelectedFileIndex((i: number) => (i > 0 ? i - 1 : diffs.length - 1));
+        setDiffScrollOffset(0);
+      } else {
+        setDiffScrollOffset((o: number) => Math.max(0, o - 3));
+      }
     } else if (key.name === "down" || key.name === "j") {
-      setSelectedFileIndex((i: number) => (i < diffs.length - 1 ? i + 1 : 0));
+      if (focusedPanel === "sidebar") {
+        setSelectedFileIndex((i: number) => (i < diffs.length - 1 ? i + 1 : 0));
+        setDiffScrollOffset(0);
+      } else {
+        setDiffScrollOffset((o: number) => o + 3);
+      }
     } else if (key.name === "s") {
       setViewMode((m: ViewMode) => (m === "split" ? "unified" : "split"));
     } else if (key.name === "b") {
       setSidebarVisible((v: boolean) => !v);
+      // If hiding sidebar while it's focused, shift focus to diff
+      if (sidebarVisible && focusedPanel === "sidebar") {
+        setFocusedPanel("diff");
+      }
     }
   });
 
@@ -81,7 +108,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
         <text fg={colors.accent}>{`${stats.filesChanged} ${stats.filesChanged === 1 ? "file" : "files"}  `}</text>
         <text fg={colors.success}>{`+${stats.totalAdded}  `}</text>
         <text fg={colors.error}>{`-${stats.totalRemoved}  `}</text>
-        <text fg={colors.textMuted}>{`   ↑↓ navigate · s ${isSplit ? "→ unified" : "→ split"} · b ${sidebarVisible ? "hide" : "show"} files · Esc close`}</text>
+        <text fg={colors.textMuted}>{`   ←→/h/l focus panel · ↑↓/j/k ${focusedPanel === "sidebar" ? "navigate files" : "scroll diff"} · s ${isSplit ? "→ unified" : "→ split"} · b ${sidebarVisible ? "hide" : "show"} files · Esc close`}</text>
       </box>
       <box height={1}><text fg={colors.border}>{rule}</text></box>
 
@@ -90,7 +117,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
 
         {/* File list panel — collapsible with `b` */}
         {sidebarVisible && (
-          <box width={FILE_LIST_W} flexDirection="column" border={["right"]}>
+          <box width={FILE_LIST_W} flexDirection="column" border={["right"]} borderFg={focusedPanel === "sidebar" ? colors.accent : colors.border}>
             <scrollbox flex={1}>
               {diffs.map((diff, i) => {
                 const isSel = i === selectedFileIndex;
@@ -114,12 +141,15 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
         )}
 
         {/* Diff panel — native <diff> with tree-sitter syntax highlighting */}
-        <box flex={1} flexDirection="column">
+        <box flex={1} flexDirection="column" borderFg={focusedPanel === "diff" ? colors.accent : colors.border}>
           {/* File path + language tag */}
           <box height={1} paddingX={1} flexDirection="row">
             <text fg={getStatusColor(sel.status)}>{getStatusIcon(sel.status) + "  "}</text>
-            <text fg={colors.text}>{sel.filePath}</text>
+            <text fg={focusedPanel === "diff" ? colors.text : colors.textDim}>{sel.filePath}</text>
             {sel.language ? <text fg={colors.textMuted}>{`  [${sel.language}]`}</text> : null}
+            {focusedPanel === "diff" && (
+              <text fg={colors.accent}>{"  ●"}</text>
+            )}
           </box>
 
           {/* Native diff renderer — handles split/unified, line numbers, syntax highlighting */}
@@ -132,6 +162,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
             treeSitterClient={treeSitterClient}
             showLineNumbers={true}
             wrapMode="word"
+            scrollTop={diffScrollOffset}
             fg={colors.text}
             addedBg="#162816"
             removedBg="#281618"

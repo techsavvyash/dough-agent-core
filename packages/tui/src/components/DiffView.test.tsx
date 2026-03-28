@@ -271,4 +271,130 @@ describe("DiffView", () => {
     expect(frame).toContain("hide files");
     expect(frame).toContain("index.ts");
   });
+
+  // ── Panel focus (l/h / →/←) ────────────────────────────────────────────────
+
+  test("l moves focus to diff panel — hint updates to 'scroll diff'", async () => {
+    const { captureCharFrame, mockInput, renderOnce } = await testRender(
+      <DiffView payload={samplePayload} onClose={createSpy()} />,
+      { width: 120, height: 30 }
+    );
+    await renderOnce();
+
+    // Starts with sidebar focused — hint says "navigate files"
+    expect(captureCharFrame()).toContain("navigate files");
+
+    act(() => { mockInput.pressKey("l"); });
+    await renderOnce();
+
+    expect(captureCharFrame()).toContain("scroll diff");
+  });
+
+  test("h moves focus back to sidebar — hint updates to 'navigate files'", async () => {
+    const { captureCharFrame, mockInput, renderOnce } = await testRender(
+      <DiffView payload={samplePayload} onClose={createSpy()} />,
+      { width: 120, height: 30 }
+    );
+    await renderOnce();
+
+    // Focus diff then back to sidebar
+    act(() => { mockInput.pressKey("l"); });
+    await renderOnce();
+    act(() => { mockInput.pressKey("h"); });
+    await renderOnce();
+
+    expect(captureCharFrame()).toContain("navigate files");
+  });
+
+  test("focusing diff panel shows ● dot in file path header", async () => {
+    const { captureCharFrame, mockInput, renderOnce } = await testRender(
+      <DiffView payload={samplePayload} onClose={createSpy()} />,
+      { width: 120, height: 30 }
+    );
+    await renderOnce();
+
+    // No dot before focusing diff
+    expect(captureCharFrame()).not.toContain("●");
+
+    act(() => { mockInput.pressKey("l"); });
+    await renderOnce();
+
+    expect(captureCharFrame()).toContain("●");
+  });
+
+  test("j/k in sidebar mode moves file selection, not diff scroll", async () => {
+    const { captureCharFrame, mockInput, renderOnce } = await testRender(
+      <DiffView payload={samplePayload} onClose={createSpy()} />,
+      { width: 120, height: 30 }
+    );
+    await renderOnce();
+
+    // Sidebar is focused by default — pressing j should move ▶ to second file
+    act(() => { mockInput.pressKey("j"); });
+    await renderOnce();
+    const frame = captureCharFrame();
+
+    // Second file should now be selected (▶ cursor), and its diff shown
+    expect(frame).toContain("src/utils.ts");
+    expect(frame).toContain("▶");
+  });
+
+  test("j/k in diff mode does not change file selection", async () => {
+    const { captureCharFrame, mockInput, renderOnce } = await testRender(
+      <DiffView payload={samplePayload} onClose={createSpy()} />,
+      { width: 120, height: 30 }
+    );
+    await renderOnce();
+
+    // Move focus to diff panel
+    act(() => { mockInput.pressKey("l"); });
+    await renderOnce();
+
+    // Press j — should scroll diff, not switch file
+    act(() => { mockInput.pressKey("j"); });
+    await renderOnce();
+    const frame = captureCharFrame();
+
+    // First file should still be selected (▶ still on index.ts row, utils.ts not in diff header)
+    // The diff panel header still shows the first file
+    expect(frame).toContain("src/index.ts");
+    // Selection indicator (▶) is still on the first file in the sidebar
+    expect(frame).toContain("▶");
+  });
+
+  test("pressing b while sidebar focused shifts focus to diff automatically", async () => {
+    const { captureCharFrame, mockInput, renderOnce } = await testRender(
+      <DiffView payload={samplePayload} onClose={createSpy()} />,
+      { width: 120, height: 30 }
+    );
+    await renderOnce();
+
+    // Sidebar is focused — hiding it should auto-focus diff
+    act(() => { mockInput.pressKey("b"); });
+    await renderOnce();
+
+    // Hint should now say "scroll diff" since diff is focused
+    expect(captureCharFrame()).toContain("scroll diff");
+  });
+
+  test("pressing h while sidebar is hidden re-shows it and focuses it", async () => {
+    const { captureCharFrame, mockInput, renderOnce } = await testRender(
+      <DiffView payload={samplePayload} onClose={createSpy()} />,
+      { width: 120, height: 30 }
+    );
+    await renderOnce();
+
+    // Hide sidebar
+    act(() => { mockInput.pressKey("b"); });
+    await renderOnce();
+
+    // h should re-show sidebar and focus it
+    act(() => { mockInput.pressKey("h"); });
+    await renderOnce();
+    const frame = captureCharFrame();
+
+    expect(frame).toContain("navigate files");
+    expect(frame).toContain("hide files"); // sidebar is visible again
+    expect(frame).toContain("index.ts");   // sidebar content visible
+  });
 });
