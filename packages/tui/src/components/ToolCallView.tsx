@@ -1,5 +1,6 @@
 import type { ToolCallEntry } from "../hooks/useSession.ts";
 import { colors, symbols } from "../theme.ts";
+import { getDoughSyntaxStyle } from "../utils/syntaxStyle.ts";
 
 interface ToolCallViewProps {
   toolCall: ToolCallEntry;
@@ -11,6 +12,7 @@ export function ToolCallView({ toolCall }: ToolCallViewProps) {
   const icon = statusIcon(status);
   const iconColor = statusColor(status);
   const label = formatToolName(name);
+  const syntaxStyle = getDoughSyntaxStyle();
 
   // For Bash/execute: show the full command in a code block instead of inline summary
   const isBash = name === "Bash" || name === "bash" || name === "execute";
@@ -35,10 +37,17 @@ export function ToolCallView({ toolCall }: ToolCallViewProps) {
         {argSummary ? <text fg={colors.textMuted}> {argSummary}</text> : null}
       </box>
 
-      {/* Bash command: full text in an indented code block */}
+      {/* Bash command: syntax-highlighted code block */}
       {bashCommand && (
         <box paddingLeft={2} paddingTop={0}>
-          <text fg={colors.textDim} wrapMode="word">{bashCommand}</text>
+          <markdown
+            content={"```bash\n" + bashCommand + "\n```"}
+            syntaxStyle={syntaxStyle}
+            fg={colors.textDim}
+            conceal={false}
+            concealCode={false}
+            streaming={false}
+          />
         </box>
       )}
 
