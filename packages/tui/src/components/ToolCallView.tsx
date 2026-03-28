@@ -40,8 +40,11 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
     <box
       flexDirection="column"
       marginLeft={3}
+      marginTop={1}
+      marginBottom={1}
       paddingLeft={1}
-      border={["left"]}
+      paddingBottom={1}
+      border={["left", "top"]}
       borderStyle="single"
       borderColor={borderColor}
     >

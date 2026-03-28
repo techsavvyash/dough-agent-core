@@ -116,7 +116,7 @@ describe("MessageBubble", () => {
           ],
         })}
       />,
-      { width: 80, height: 8 }
+      { width: 80, height: 20 }
     );
     await renderOnce();
     const frame = captureCharFrame();
@@ -149,7 +149,7 @@ describe("MessageBubble", () => {
           ],
         })}
       />,
-      { width: 80, height: 6 }
+      { width: 80, height: 12 }
     );
     await renderOnce();
     const frame = captureCharFrame();

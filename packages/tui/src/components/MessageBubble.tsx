@@ -48,7 +48,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
         {/* Tool calls */}
         {toolCalls && toolCalls.length > 0 && (
-          <box flexDirection="column">
+          <box flexDirection="column" paddingTop={1}>
             {toolCalls.map((tc) => (
               <ToolCallView key={tc.callId} toolCall={tc} />
             ))}
