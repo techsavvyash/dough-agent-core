@@ -223,14 +223,19 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
             showLineNumbers={true}
             wrapMode="word"
             fg={colors.text}
-            addedBg="#162816"
-            removedBg="#281618"
+            // Line gutter (line-number column) backgrounds
+            addedLineNumberBg="#0e2010"
+            removedLineNumberBg="#20100e"
             contextBg="transparent"
+            lineNumberFg={colors.textMuted}
+            // Content area backgrounds — slightly lighter so code pops
+            addedBg="#0e2010"
+            removedBg="#20100e"
+            addedContentBg="#162816"
+            removedContentBg="#281618"
+            // +/- sign colours
             addedSignColor={colors.success}
             removedSignColor={colors.error}
-            addedLineNumberBg="#122512"
-            removedLineNumberBg="#251215"
-            lineNumberFg={colors.textMuted}
           />
         </box>
 

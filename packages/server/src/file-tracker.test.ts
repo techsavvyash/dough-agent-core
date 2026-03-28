@@ -149,7 +149,7 @@ test("getDiffs detects language from extension", async () => {
   const payload = tracker.getDiffs("s1");
   const tsFile = payload.diffs.find((d) => d.filePath.endsWith(".tsx"));
   const pyFile = payload.diffs.find((d) => d.filePath.endsWith(".py"));
-  expect(tsFile?.language).toBe("tsx");
+  expect(tsFile?.language).toBe("typescriptreact"); // TSX uses OpenTUI's typescriptreact alias
   expect(pyFile?.language).toBe("python");
 });
 
