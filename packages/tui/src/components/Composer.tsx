@@ -75,7 +75,8 @@ export function Composer({
       return;
     }
     if (key.sequence === "?" && !isStreaming && !paletteOpen && onOpenPalette) {
-      const currentValue = inputRef.current?.editBuffer.getText() ?? "";
+      let currentValue = "";
+      try { currentValue = inputRef.current?.editBuffer.getText() ?? ""; } catch { return; }
       if (currentValue === "" || currentValue === "?") {
         // Use setTimeout so the clear runs after the textarea's own key-insert
         // handler — otherwise the "?" lands in the buffer after our setText("").
@@ -103,13 +104,14 @@ export function Composer({
   });
 
   const handleSubmit = useCallback(() => {
-    const raw = inputRef.current?.editBuffer.getText() ?? "";
+    let raw = "";
+    try { raw = inputRef.current?.editBuffer.getText() ?? ""; } catch { return; }
     const trimmed = raw.trim();
     if (!trimmed && pendingAttachments.length === 0) return;
     // Allow submission while streaming — the server will queue it.
     onSubmit(trimmed, pendingAttachments.length > 0 ? pendingAttachments : undefined);
     setPendingAttachments([]);
-    inputRef.current?.editBuffer.setText("");
+    try { inputRef.current?.editBuffer.setText(""); } catch { /* destroyed */ }
     setInputLines(1);
   }, [onSubmit, pendingAttachments]);
 
