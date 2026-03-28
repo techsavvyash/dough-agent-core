@@ -36,11 +36,6 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
   const extraLines = Math.max(0, outputLines.length - PREVIEW_LINES);
   const showOutputPreview = isBash && outputLines.length > 0 && status !== "pending";
 
-  // DEBUG: log the types to diagnose TextNodeRenderable crash
-  if (showOutputPreview) {
-    console.error("[ToolCallView DEBUG] output type:", typeof output, "previewText type:", typeof previewText, "val:", JSON.stringify(previewText).slice(0, 100));
-  }
-
   return (
     <box
       flexDirection="column"
