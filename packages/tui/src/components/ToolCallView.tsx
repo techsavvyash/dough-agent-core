@@ -35,7 +35,7 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
   const showOutputPreview = isBash && outputLines.length > 0 && status !== "pending";
 
   return (
-    <box flexDirection="column" marginLeft={2} marginBottom={1}>
+    <box flexDirection="column" marginLeft={2}>
 
       {/* ─ $ command  (bash)  OR  ─ ✓ Label  arg  (other tools) */}
       <box flexDirection="row">
