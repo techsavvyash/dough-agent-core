@@ -70,10 +70,12 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
         <box paddingLeft={2} flexDirection="column">
           <text fg={colors.textMuted} wrapMode="char">{previewText}</text>
           {extraLines > 0 && (
-            <text fg={colors.textMuted}>
-              {"  …" + String(extraLines) + " more line" + (extraLines === 1 ? "" : "s") + "  "}
+            <box flexDirection="row">
+              <text fg={colors.textMuted}>
+                {"  …" + String(extraLines) + " more line" + (extraLines === 1 ? "" : "s") + "  "}
+              </text>
               <text fg={colors.borderActive}>Ctrl+O to expand</text>
-            </text>
+            </box>
           )}
         </box>
       )}
