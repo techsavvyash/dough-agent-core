@@ -9,6 +9,8 @@ export interface ToolCallEntry {
   args: Record<string, unknown>;
   status: "pending" | "success" | "error";
   result?: unknown;
+  /** Raw stdout/stderr captured from the tool execution. */
+  output?: string;
 }
 
 export interface Message {
@@ -141,6 +143,12 @@ export function useSession(client: DoughClient) {
                     ...updatedCalls[idx]!,
                     status: event.isError ? "error" : "success",
                     result: event.result,
+                    output:
+                      typeof event.result === "string"
+                        ? event.result
+                        : event.result != null
+                          ? JSON.stringify(event.result, null, 2)
+                          : undefined,
                   };
                   return [
                     ...prev.slice(0, i),

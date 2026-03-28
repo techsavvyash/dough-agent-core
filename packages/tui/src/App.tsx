@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { Attachment } from "@dough/protocol";
 import { DoughClient } from "./client.ts";
@@ -11,6 +11,7 @@ import { ChatView } from "./components/ChatView.tsx";
 import { Composer } from "./components/Composer.tsx";
 import { DiffView } from "./components/DiffView.tsx";
 import { ThreadViewer } from "./components/ThreadViewer.tsx";
+import { BashOutputView, type BashCallEntry } from "./components/BashOutputView.tsx";
 import {
   CommandPalette,
   COMMANDS,
@@ -45,8 +46,26 @@ export function App({ serverUrl, provider, model }: AppProps) {
   const [showPalette, setShowPalette] = useState(false);
   const [showDiffView, setShowDiffView] = useState(false);
   const [showThreadViewer, setShowThreadViewer] = useState(false);
+  const [showBashOutput, setShowBashOutput] = useState(false);
+  /** Flat list of every bash tool call across all messages — used by BashOutputView. */
+  const bashCalls = useMemo<BashCallEntry[]>(() => {
+    const acc: BashCallEntry[] = [];
+    for (const msg of messages) {
+      for (const tc of msg.toolCalls ?? []) {
+        if (tc.name === "Bash" || tc.name === "bash" || tc.name === "execute") {
+          acc.push({
+            callId: tc.callId,
+            command: String(tc.args.command ?? ""),
+            output: tc.output,
+            status: tc.status,
+          });
+        }
+      }
+    }
+    return acc;
+  }, [messages]);
 
-  const noOverlay = !showPalette && !showDiffView && !showThreadViewer;
+  const noOverlay = !showPalette && !showDiffView && !showThreadViewer && !showBashOutput;
 
   // Ctrl+D to enter diff mode
   useKeyboard((key) => {
@@ -60,6 +79,12 @@ export function App({ serverUrl, provider, model }: AppProps) {
     if (key.ctrl && key.name === "t" && noOverlay) {
       requestAllThreads();
       setShowThreadViewer(true);
+    }
+    // Ctrl+O to open bash output viewer
+    if (key.ctrl && key.name === "o" && noOverlay) {
+      if (bashCalls.length > 0) {
+        setShowBashOutput(true);
+      }
     }
   });
 
@@ -215,6 +240,16 @@ export function App({ serverUrl, provider, model }: AppProps) {
     },
     [client, clearMessages, addSystemMessage]
   );
+
+  // Full-screen bash output overlay
+  if (showBashOutput) {
+    return (
+      <BashOutputView
+        calls={bashCalls}
+        onClose={() => setShowBashOutput(false)}
+      />
+    );
+  }
 
   // Full-screen thread viewer overlay
   if (showThreadViewer) {

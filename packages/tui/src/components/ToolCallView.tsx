@@ -2,15 +2,21 @@ import type { ToolCallEntry } from "../hooks/useSession.ts";
 import { colors, symbols } from "../theme.ts";
 import { getDoughSyntaxStyle } from "../utils/syntaxStyle.ts";
 
+/** Number of output lines to show inline before truncating. */
+const PREVIEW_LINES = 6;
+
 interface ToolCallViewProps {
   toolCall: ToolCallEntry;
+  /** When true, renders with an accent border to indicate keyboard focus. */
+  selected?: boolean;
 }
 
 /** Render a single tool call with a left-bordered highlighted box, status icon, and label. */
-export function ToolCallView({ toolCall }: ToolCallViewProps) {
-  const { name, args, status, result } = toolCall;
+export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) {
+  const { name, args, status, result, output } = toolCall;
   const icon = statusIcon(status);
   const iconColor = statusColor(status);
+  const borderColor = selected ? colors.accent : iconColor;
   const label = formatToolName(name);
   const syntaxStyle = getDoughSyntaxStyle();
 
@@ -21,6 +27,14 @@ export function ToolCallView({ toolCall }: ToolCallViewProps) {
   // For non-Bash tools: compact inline arg summary
   const argSummary = bashCommand ? null : formatArgs(name, args);
 
+  // Output preview — first PREVIEW_LINES of raw output, trimmed of trailing blank lines
+  const outputLines = output
+    ? output.split("\n").join("\n").trimEnd().split("\n")
+    : [];
+  const previewText = outputLines.slice(0, PREVIEW_LINES).join("\n");
+  const extraLines = Math.max(0, outputLines.length - PREVIEW_LINES);
+  const showOutputPreview = isBash && outputLines.length > 0 && status !== "pending";
+
   return (
     <box
       flexDirection="column"
@@ -28,7 +42,7 @@ export function ToolCallView({ toolCall }: ToolCallViewProps) {
       paddingLeft={1}
       border={["left"]}
       borderStyle="single"
-      borderColor={iconColor}
+      borderColor={borderColor}
     >
       {/* Header row: icon + tool name + optional inline arg */}
       <box height={1} flexDirection="row">
@@ -51,8 +65,21 @@ export function ToolCallView({ toolCall }: ToolCallViewProps) {
         </box>
       )}
 
+      {/* Output preview */}
+      {showOutputPreview && (
+        <box paddingLeft={2} flexDirection="column">
+          <text fg={colors.textMuted} wrapMode="char">{previewText}</text>
+          {extraLines > 0 && (
+            <text fg={colors.textMuted}>
+              {"  "}…{extraLines} more line{extraLines === 1 ? "" : "s"}{"  "}
+              <text fg={colors.borderActive}>Ctrl+O to expand</text>
+            </text>
+          )}
+        </box>
+      )}
+
       {/* Error output */}
-      {status === "error" && result != null && (
+      {status === "error" && result != null && !output && (
         <box paddingLeft={1}>
           <text fg={colors.error} wrapMode="word">{String(result).slice(0, 300)}</text>
         </box>
