@@ -107,6 +107,14 @@ export class DoughSession {
     };
 
     let fullResponse = "";
+    // Collect tool calls so they can be persisted with the assistant message
+    const toolCallMap = new Map<string, {
+      name: string;
+      args: Record<string, unknown>;
+      result?: unknown;
+      isError?: boolean;
+    }>();
+
     for await (const event of this.provider.send(
       currentThread.messages,
       options
@@ -120,6 +128,15 @@ export class DoughSession {
       if (event.type === DoughEventType.ContentDelta) {
         fullResponse += event.text;
       }
+      if (event.type === DoughEventType.ToolCallRequest) {
+        toolCallMap.set(event.callId, { name: event.name, args: event.args });
+      }
+      if (event.type === DoughEventType.ToolCallResponse) {
+        const tc = toolCallMap.get(event.callId);
+        if (tc) {
+          toolCallMap.set(event.callId, { ...tc, result: event.result, isError: event.isError });
+        }
+      }
 
       yield event;
     }
@@ -130,14 +147,28 @@ export class DoughSession {
       return;
     }
 
-    // Store assistant response
-    if (fullResponse) {
+    // Store assistant response, including any tool calls that occurred this turn
+    if (fullResponse || toolCallMap.size > 0) {
+      const toolCalls = Array.from(toolCallMap.entries()).map(([callId, tc]) => ({
+        callId,
+        name: tc.name,
+        args: tc.args,
+        status: (tc.isError ? "error" : "success") as "success" | "error",
+        output:
+          typeof tc.result === "string"
+            ? tc.result
+            : tc.result != null
+              ? JSON.stringify(tc.result, null, 2)
+              : undefined,
+      }));
+
       const assistantMessage: ThreadMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
         content: fullResponse,
         tokenEstimate: Math.ceil(fullResponse.length / 4),
         timestamp: new Date().toISOString(),
+        metadata: toolCalls.length > 0 ? { toolCalls } : undefined,
       };
       await this.threadManager.addMessage(this.activeThreadId!, assistantMessage);
     }

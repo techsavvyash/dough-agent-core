@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import { DoughEventType } from "@dough/protocol";
-import type { Attachment, ClientMessage, ServerMessage } from "@dough/protocol";
+import type { Attachment, ClientMessage, ServerMessage, HistoricalToolCall } from "@dough/protocol";
 import type { DoughSession } from "@dough/core";
 import { DoughAgent } from "@dough/core";
 import { appendAttributionTrailer, isGitCommitCommand } from "@dough/core";
@@ -227,6 +227,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
         role: m.role as "user" | "assistant" | "system",
         content: m.content,
         timestamp: m.timestamp,
+        toolCalls: m.metadata?.toolCalls as HistoricalToolCall[] | undefined,
       })),
     };
     ws.send(JSON.stringify(reply));

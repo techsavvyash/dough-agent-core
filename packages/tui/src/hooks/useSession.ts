@@ -265,6 +265,14 @@ export function useSession(client: DoughClient) {
           role: m.role,
           content: m.content,
           timestamp: m.timestamp,
+          // Restore tool calls so they show up after a reconnect
+          toolCalls: m.toolCalls?.map((tc) => ({
+            callId: tc.callId,
+            name: tc.name,
+            args: tc.args,
+            status: tc.status,
+            output: tc.output,
+          })),
         }));
         setMessages(historical);
         setError(null);

@@ -5,16 +5,28 @@ import type { McpServerConfig, McpServerStatus } from "./mcp.ts";
 import type { SkillStatus } from "./skills.ts";
 import type { TodoItem } from "./todos.ts";
 
+/** A tool call persisted alongside an assistant message for history replay. */
+export interface HistoricalToolCall {
+  callId: string;
+  name: string;
+  args: Record<string, unknown>;
+  status: "success" | "error";
+  output?: string;
+}
+
 /**
  * A single message from a persisted thread's history.
  * Intentionally minimal — the full SDK transcript lives in the provider's
  * own session files; what Dough stores is user prompts + final assistant text.
+ * Tool calls that occurred during an assistant turn are included so the TUI
+ * can show them after a reconnect.
  */
 export interface HistoricalMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: string;
+  toolCalls?: HistoricalToolCall[];
 }
 
 /** A file or image attached to a user message. */
