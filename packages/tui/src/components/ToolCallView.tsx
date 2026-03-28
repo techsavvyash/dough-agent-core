@@ -71,7 +71,7 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
           <text fg={colors.textMuted} wrapMode="char">{previewText}</text>
           {extraLines > 0 && (
             <text fg={colors.textMuted}>
-              {"  "}…{extraLines} more line{extraLines === 1 ? "" : "s"}{"  "}
+              {"  …" + String(extraLines) + " more line" + (extraLines === 1 ? "" : "s") + "  "}
               <text fg={colors.borderActive}>Ctrl+O to expand</text>
             </text>
           )}

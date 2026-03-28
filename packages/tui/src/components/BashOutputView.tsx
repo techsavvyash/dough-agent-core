@@ -91,7 +91,7 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
       <box height={1}><text fg={colors.border}>{rule}</text></box>
       <box height={1} paddingX={2} flexDirection="row">
         <text fg={colors.primary}>{"Bash Output  "}</text>
-        <text fg={colors.accent}>{calls.length} command{calls.length === 1 ? "" : "s"}{"  "}</text>
+        <text fg={colors.accent}>{String(calls.length) + " command" + (calls.length === 1 ? "" : "s") + "  "}</text>
         {sel && (
           <text fg={statusColor(sel.status)}>
             {statusIcon(sel.status)}{"  "}
@@ -133,7 +133,7 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
             {/* Index indicator */}
             <box height={1} paddingX={1}>
               <text fg={colors.textMuted}>
-                {selectedIndex + 1}/{calls.length}
+                {String(selectedIndex + 1) + "/" + String(calls.length)}
               </text>
             </box>
           </box>
