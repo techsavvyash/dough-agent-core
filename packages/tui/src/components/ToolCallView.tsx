@@ -28,12 +28,18 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
   const argSummary = bashCommand ? null : formatArgs(name, args);
 
   // Output preview — first PREVIEW_LINES of raw output, trimmed of trailing blank lines
-  const outputLines = output
-    ? output.split("\n").join("\n").trimEnd().split("\n")
+  const rawOutput = typeof output === "string" ? output : undefined;
+  const outputLines = rawOutput
+    ? rawOutput.trimEnd().split("\n")
     : [];
   const previewText = outputLines.slice(0, PREVIEW_LINES).join("\n");
   const extraLines = Math.max(0, outputLines.length - PREVIEW_LINES);
   const showOutputPreview = isBash && outputLines.length > 0 && status !== "pending";
+
+  // DEBUG: log the types to diagnose TextNodeRenderable crash
+  if (showOutputPreview) {
+    console.error("[ToolCallView DEBUG] output type:", typeof output, "previewText type:", typeof previewText, "val:", JSON.stringify(previewText).slice(0, 100));
+  }
 
   return (
     <box
