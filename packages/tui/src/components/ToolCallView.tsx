@@ -44,7 +44,7 @@ export function ToolCallView({ toolCall }: ToolCallViewProps) {
             content={"```bash\n" + bashCommand + "\n```"}
             syntaxStyle={syntaxStyle}
             fg={colors.textDim}
-            conceal={false}
+            conceal={true}
             concealCode={false}
             streaming={false}
           />
