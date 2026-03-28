@@ -34,8 +34,8 @@ function createFakeProvider(
     maxContextTokens: 200_000,
 
     async *send(
-      messages: ThreadMessage[],
-      options: SendOptions
+      _messages: ThreadMessage[],
+      _options: SendOptions
     ): AsyncGenerator<DoughEvent> {
       const streamId = crypto.randomUUID();
       yield {
@@ -247,7 +247,7 @@ describe("DoughSession — token limit enforcement", () => {
     });
 
     // First handoff (198 + ceil(10/4)=3 = 201 > 200)
-    const events1 = await collectEvents(session.send("handoff 1"));
+    await collectEvents(session.send("handoff 1"));
     const secondThreadId = session.currentThreadId!;
     expect(secondThreadId).not.toBe(firstThreadId);
 
@@ -261,7 +261,7 @@ describe("DoughSession — token limit enforcement", () => {
     });
 
     // Second handoff
-    const events2 = await collectEvents(session.send("handoff 2"));
+    await collectEvents(session.send("handoff 2"));
     const thirdThreadId = session.currentThreadId!;
     expect(thirdThreadId).not.toBe(secondThreadId);
 
@@ -331,7 +331,7 @@ describe("DoughSession — token limit enforcement", () => {
   test("needsHandoff uses fresh token count after addMessage", async () => {
     // This test specifically targets the stale-data bug:
     // needsHandoff must check the UPDATED thread, not a stale copy.
-    const { session, tm } = createSession(100);
+    const { session, tm: _tm } = createSession(100);
     await session.initialize();
     const threadId = session.currentThreadId!;
 
@@ -376,11 +376,11 @@ describe("DoughSession — token limit enforcement", () => {
     const slowProvider: LLMProvider = {
       name: "slow",
       maxContextTokens: 200_000,
-      async *send(messages, options): AsyncGenerator<DoughEvent> {
+      async *send(_messages, _options): AsyncGenerator<DoughEvent> {
         const streamId = crypto.randomUUID();
         yield { type: DoughEventType.ContentDelta, text: "part1 ", streamId };
         // Check abort after first delta
-        if (options.signal?.aborted) return;
+        if (_options.signal?.aborted) return;
         yield { type: DoughEventType.ContentDelta, text: "part2", streamId };
       },
       estimateTokens(messages) {

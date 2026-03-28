@@ -1,6 +1,5 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
-import React from "react";
 import { App } from "./App.tsx";
 
 const args = process.argv.slice(2);

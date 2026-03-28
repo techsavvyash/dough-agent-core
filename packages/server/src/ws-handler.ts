@@ -1,13 +1,19 @@
 import type { ServerWebSocket } from "bun";
 import { DoughEventType } from "@dough/protocol";
-import type { Attachment, ClientMessage, ServerMessage, HistoricalToolCall } from "@dough/protocol";
+import type {
+  Attachment,
+  ClientMessage,
+  ServerMessage,
+  HistoricalToolCall,
+  RuntimeShortcutMeta,
+  RuntimeCommandMeta,
+  RuntimePanelMeta,
+} from "@dough/protocol";
 import type { DoughSession } from "@dough/core";
 import { DoughAgent } from "@dough/core";
-import { appendAttributionTrailer, isGitCommitCommand } from "@dough/core";
-import type { TodoManager } from "@dough/core";
+import type { DiffCheckpointExtensionInstance } from "@dough/core";
 import { ThreadManager } from "@dough/threads";
 import type { ThreadStore, FileDiffRecord } from "@dough/threads";
-import { FileTracker } from "./file-tracker.ts";
 import type { FileTrackerPersistence } from "./file-tracker.ts";
 
 /**
@@ -23,7 +29,6 @@ export interface FileDiffStore {
 export interface WSData {
   sessionId: string | null;
   session: DoughSession | null;
-  fileTracker: FileTracker;
   /** Prompts (+ optional attachments) waiting to run once the current agent turn completes. */
   sendQueue: { prompt: string; attachments?: Attachment[] }[];
   /** True while drainQueue() is iterating; prevents concurrent drains. */
@@ -43,40 +48,180 @@ function deriveTitle(prompt: string): string {
   return firstLine.length > 60 ? firstLine.slice(0, 57) + "…" : firstLine;
 }
 
-/** Tool names that write to files — we intercept these for diffing */
-const FILE_WRITE_TOOLS = new Set([
-  // claude-agent-sdk tool names (capitalized)
-  "Write", "Edit", "MultiEdit",
-  // Common lowercase variants
-  "write_file", "create_file", "edit_file", "str_replace",
-  "insert", "replace", "write", "patch",
-]);
-const FILE_DELETE_TOOLS = new Set(["delete_file", "remove_file", "rm", "Delete"]);
+/**
+ * Serialize runtime commands/shortcuts/panels into protocol-safe meta objects.
+ */
+function getContributions(agent: DoughAgent): {
+  shortcuts: RuntimeShortcutMeta[];
+  commands: RuntimeCommandMeta[];
+  panels: RuntimePanelMeta[];
+} {
+  const runtime = agent.getRuntime();
+  return {
+    shortcuts: runtime.getShortcuts().map((s) => ({
+      id: s.id,
+      key: s.key,
+      description: s.description,
+      commandId: s.commandId,
+    })),
+    commands: runtime.getCommands().map((c) => ({
+      id: c.id,
+      name: c.name,
+      description: c.description,
+      category: c.category,
+    })),
+    panels: runtime.getPanels().map((p) => ({
+      id: p.id,
+      name: p.name,
+      mode: p.mode,
+    })),
+  };
+}
 
 /**
- * Extract file path from a tool call's arguments.
- * Handles common patterns: { path }, { file_path }, { filePath }
+ * Flush any pending runtime UI intents to the client.
  */
-function extractFilePath(args: Record<string, unknown>): string | null {
-  for (const key of ["path", "file_path", "filePath", "file", "filename"]) {
-    if (typeof args[key] === "string") return args[key] as string;
+function flushRuntimeIntents(ws: ServerWebSocket<WSData>, agent: DoughAgent): void {
+  const runtime = agent.getRuntime();
+
+  // Drain notifications
+  for (const notif of runtime.drainNotifications()) {
+    const msg: ServerMessage = {
+      kind: "runtime:notify",
+      message: notif.message,
+      level: notif.level,
+    };
+    ws.send(JSON.stringify(msg));
   }
-  return null;
+
+  // Drain panel open intents
+  for (const intent of runtime.drainPanelOpenIntents()) {
+    const msg: ServerMessage = {
+      kind: "runtime:open_panel",
+      panelId: intent.panelId,
+      data: intent.data,
+    };
+    ws.send(JSON.stringify(msg));
+  }
+
+  // Status updates
+  const status = runtime.getStatus();
+  if (status.size > 0) {
+    const entries: Record<string, string> = {};
+    for (const [k, v] of status) entries[k] = v;
+    const msg: ServerMessage = { kind: "runtime:status", entries };
+    ws.send(JSON.stringify(msg));
+  }
 }
 
 export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStore?: FileDiffStore) {
   const sessions = new Map<string, DoughSession>();
+
+  /** Get the diff-checkpoint extension's FileTracker (single instance, shared across connections). */
+  function getDiffTracker() {
+    const ext = agent.getRuntime().getExtension<DiffCheckpointExtensionInstance>("diff-checkpoint");
+    return ext?.getTracker() ?? null;
+  }
+
+  /** Send current runtime contributions to the client. Called on open and
+   *  after create/resume (runtime may not be initialized at open time). */
+  function sendContributions(ws: ServerWebSocket<WSData>): void {
+    const { shortcuts, commands, panels } = getContributions(agent);
+    ws.send(JSON.stringify({ kind: "runtime:shortcuts", shortcuts } as ServerMessage));
+    ws.send(JSON.stringify({ kind: "runtime:commands", commands } as ServerMessage));
+    ws.send(JSON.stringify({ kind: "runtime:panels", panels } as ServerMessage));
+  }
+
+  // ── Command side-effects ────────────────────────────────────────────────────
+
   /**
-   * Tracks in-flight Bash tool calls so we can inspect the command after the
-   * result comes back. Keyed by callId. Cleared on response.
+   * Handle server-side operations for runtime commands that need access to
+   * agent/session/store. Called after the extension's execute() has run and
+   * UI intents have been flushed.
    */
-  const pendingBashCalls = new Map<string, string>(); // callId → command string
+  async function handleCommandSideEffects(
+    ws: ServerWebSocket<WSData>,
+    commandId: string,
+  ): Promise<void> {
+    switch (commandId) {
+      case "session.thread_fork": {
+        const session = ws.data.session;
+        if (!session?.currentThreadId) return;
+        const tm = agent.getThreadManager();
+        const result = await tm.fork(session.currentThreadId);
+        const reply: ServerMessage = {
+          kind: "event",
+          event: {
+            type: DoughEventType.ThreadForked,
+            fromThreadId: result.originalThread.id,
+            newThreadId: result.forkedThread.id,
+            reason: "Full fork",
+          },
+        };
+        ws.send(JSON.stringify(reply));
+        break;
+      }
+
+      case "session.thread_new": {
+        const newSession = await agent.session();
+        await newSession.initialize();
+        sessions.set(newSession.id, newSession);
+        ws.data.sessionId = newSession.id;
+        ws.data.session = newSession;
+
+        const runtime = agent.getRuntime();
+        runtime.setSession(newSession.id, newSession.currentThreadId!);
+        await runtime.emit({
+          type: "session:start",
+          sessionId: newSession.id,
+          threadId: newSession.currentThreadId!,
+        });
+
+        const now = new Date().toISOString();
+        const providerName = agent.getProvider().name;
+        await store?.saveSession({
+          id: newSession.id,
+          activeThreadId: newSession.currentThreadId!,
+          provider: providerName,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        const tm = agent.getThreadManager();
+        const threads = await tm.listThreads(newSession.id);
+        const reply: ServerMessage = {
+          kind: "session_info",
+          session: {
+            id: newSession.id,
+            activeThreadId: newSession.currentThreadId!,
+            threads: threads.map((t) => ThreadManager.toMeta(t)),
+            provider: providerName,
+            createdAt: now,
+            updatedAt: now,
+          },
+        };
+        ws.send(JSON.stringify(reply));
+        sendContributions(ws);
+        break;
+      }
+
+      case "session.compact": {
+        if (ws.data.session) {
+          ws.data.sendQueue.push({ prompt: "/compact" });
+          drainQueue(ws);
+        }
+        break;
+      }
+    }
+  }
 
   // ── Send-queue helpers ──────────────────────────────────────────────────────
 
   /**
    * Run one full agent turn for `prompt` on `session`, streaming all events
-   * back over `ws`. Extracted so drainQueue() can call it serially.
+   * back over `ws`. Platform events (tool:call, tool:result, etc.) are now
+   * emitted by DoughSession through the PlatformRuntime's event bus —
+   * extensions handle attribution, diff tracking, etc. automatically.
    */
   async function processOneSend(
     ws: ServerWebSocket<WSData>,
@@ -84,9 +229,8 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
     prompt: string,
     attachments?: Attachment[]
   ): Promise<void> {
-    const tracker = ws.data.fileTracker;
-
-    const unsubStats = tracker.onChange((stats) => {
+    const tracker = getDiffTracker();
+    const unsubStats = tracker?.onChange((stats) => {
       const statsMsg: ServerMessage = {
         kind: "event",
         event: { type: DoughEventType.ChangeStatsUpdate, stats },
@@ -96,60 +240,13 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
 
     try {
       for await (const event of session.send(prompt, attachments)) {
-        // ── Attribution fallback ─────────────────────────────────────
-        // The primary attribution mechanism is a ToolMiddleware applied at
-        // the DoughAgent level (createAttributionMiddleware in core), which
-        // fires BEFORE execution via the provider's PreToolUse hook and injects
-        // `--trailer` directly into the git commit command.
-        //
-        // This post-hoc amend is a safety net for edge cases where the hook
-        // couldn't fire: --amend commits, providers without hook support, etc.
-        if (
-          event.type === DoughEventType.ToolCallRequest &&
-          event.name === "Bash" &&
-          typeof event.args.command === "string"
-        ) {
-          pendingBashCalls.set(event.callId, event.args.command as string);
-        }
-
-        if (event.type === DoughEventType.ToolCallResponse && !event.isError) {
-          const bashCmd = pendingBashCalls.get(event.callId);
-          if (bashCmd !== undefined) {
-            pendingBashCalls.delete(event.callId);
-            // Skip --amend commands (avoid double-amending the primary hook's work)
-            if (isGitCommitCommand(bashCmd) && !/--amend\b/.test(bashCmd)) {
-              await appendAttributionTrailer(agent.getCwd());
-            }
-          }
-        }
-
-        // ── File write tracking (diffing) ────────────────────────────
-        if (
-          event.type === DoughEventType.ToolCallRequest &&
-          FILE_WRITE_TOOLS.has(event.name)
-        ) {
-          const filePath = extractFilePath(event.args);
-          if (filePath) await tracker.snapshotBefore(filePath);
-        }
-
-        if (
-          event.type === DoughEventType.ToolCallResponse &&
-          !event.isError
-        ) {
-          for (const filePath of tracker["snapshots"].keys()) {
-            await tracker.recordAfter(filePath);
-          }
-        }
-
-        if (
-          event.type === DoughEventType.ToolCallRequest &&
-          FILE_DELETE_TOOLS.has(event.name)
-        ) {
-          const filePath = extractFilePath(event.args);
-          if (filePath) await tracker.recordDelete(filePath);
-        }
-
+        // Platform events (attribution, diff tracking) are handled by
+        // extensions via the runtime event bus in DoughSession.send().
+        // We just relay DoughEvents to the client.
         ws.send(JSON.stringify({ kind: "event", event } as ServerMessage));
+
+        // Flush any runtime notifications/intents generated by extensions
+        flushRuntimeIntents(ws, agent);
       }
     } catch (error) {
       const err: ServerMessage = {
@@ -158,7 +255,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
       };
       ws.send(JSON.stringify(err));
     } finally {
-      unsubStats();
+      unsubStats?.();
 
       if (session.currentThreadId) {
         // Set a short display title from the first user prompt if not already set.
@@ -182,6 +279,9 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           });
         }
       }
+
+      // Final flush of any remaining intents
+      flushRuntimeIntents(ws, agent);
     }
   }
 
@@ -276,7 +376,12 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           }
         : undefined;
 
-      ws.data.fileTracker = new FileTracker({ persistence });
+      // Configure persistence on the diff-checkpoint extension's shared tracker
+      const tracker = getDiffTracker();
+      if (tracker && persistence) {
+        tracker.setPersistence(persistence);
+      }
+
       ws.data.sendQueue = [];
       ws.data.isProcessingQueue = false;
       ws.data.pendingManualVerifications = new Map();
@@ -291,6 +396,10 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           }
         });
       }
+
+      // Send runtime contributions (may be empty if runtime not yet initialized —
+      // resent after create/resume when runtime is guaranteed ready)
+      sendContributions(ws);
 
       console.log(`[ws] client connected (diffStore=${!!diffStore}, persistence=${!!persistence})`);
     },
@@ -308,6 +417,11 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           ws.data.sessionId = session.id;
           ws.data.session = session;
 
+          // Update runtime session state
+          const runtime = agent.getRuntime();
+          runtime.setSession(session.id, session.currentThreadId!);
+          await runtime.emit({ type: "session:start", sessionId: session.id, threadId: session.currentThreadId! });
+
           // Persist session so it can be reconstructed after server restart
           const now = new Date().toISOString();
           await store?.saveSession({
@@ -318,10 +432,6 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
             createdAt: now,
             updatedAt: now,
           });
-
-          // Reset file tracker for new session and bind it to the new session ID
-          ws.data.fileTracker.reset();
-          ws.data.fileTracker.setSessionId(session.id);
 
           // Fetch the initial thread metadata
           const tm = agent.getThreadManager();
@@ -341,6 +451,9 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
             },
           };
           ws.send(JSON.stringify(reply));
+
+          // Runtime is now initialized — resend contributions
+          sendContributions(ws);
           break;
         }
 
@@ -400,13 +513,14 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
             ws.data.sessionId = msg.sessionId;
             ws.data.session = resumed;
 
-            // Hydrate file tracker from persisted diffs so Ctrl+D works after restart
-            ws.data.fileTracker.setSessionId(msg.sessionId);
-            ws.data.fileTracker.hydrate(msg.sessionId);
+            // Update runtime session state and emit resume event
+            const runtime = agent.getRuntime();
+            runtime.setSession(resumed.id, resumed.currentThreadId!);
+            await runtime.emit({ type: "session:resume", sessionId: resumed.id, threadId: resumed.currentThreadId! });
 
             // Push ChangeStatsUpdate immediately so the TUI badge lights up without
             // requiring the user to run another prompt first
-            const hydratedStats = ws.data.fileTracker.getStats();
+            const hydratedStats = getDiffTracker()?.getStats() ?? { filesChanged: 0, totalAdded: 0, totalRemoved: 0, files: [] };
             console.log(`[ws] resume hydrated stats: filesChanged=${hydratedStats.filesChanged} +${hydratedStats.totalAdded}/-${hydratedStats.totalRemoved}`);
             if (hydratedStats.filesChanged > 0) {
               const statsMsg: ServerMessage = {
@@ -434,6 +548,9 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
               },
             };
             ws.send(JSON.stringify(reply));
+
+            // Runtime is now initialized — resend contributions
+            sendContributions(ws);
 
             // Send thread history so the TUI can populate the message panel
             if (resumed.currentThreadId) {
@@ -495,6 +612,9 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           // Switch active thread within the session
           targetSession.resumeThread(msg.threadId);
 
+          // Update runtime session state
+          agent.getRuntime().setSession(targetSession.id, msg.threadId);
+
           // Persist the updated active thread
           if (store) {
             const rec = await store.loadSession(targetSession.id);
@@ -553,10 +673,12 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
         }
 
         case "get_diffs": {
-          const tracker = ws.data.fileTracker;
+          const ext = agent.getRuntime().getExtension<DiffCheckpointExtensionInstance>("diff-checkpoint");
           const sessionId = ws.data.sessionId ?? "unknown";
           const threadId = ws.data.session?.currentThreadId ?? undefined;
-          const payload = tracker.getDiffs(sessionId, threadId);
+          const payload = ext
+            ? ext.getDiffs(sessionId, threadId)
+            : { sessionId, threadId, diffs: [], stats: { filesChanged: 0, totalAdded: 0, totalRemoved: 0, files: [] } };
           const reply: ServerMessage = { kind: "diffs", payload };
           ws.send(JSON.stringify(reply));
           break;
@@ -697,6 +819,56 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
             const pushMsg: ServerMessage = { kind: "todos_update", todos };
             ws.send(JSON.stringify(pushMsg));
           }
+          break;
+        }
+
+        // ── Runtime messages ────────────────────────────────────────
+
+        case "runtime:get_contributions": {
+          sendContributions(ws);
+          break;
+        }
+
+        case "runtime:shortcut_triggered": {
+          const runtime = agent.getRuntime();
+          await runtime.emit({ type: "ui:shortcut", shortcutId: msg.shortcutId });
+
+          // Find the command linked to this shortcut and execute it
+          const shortcut = runtime.getShortcuts().find((s) => s.id === msg.shortcutId);
+          if (shortcut) {
+            const cmd = runtime.getCommand(shortcut.commandId);
+            if (cmd) {
+              await cmd.execute({
+                sessionId: ws.data.sessionId ?? "",
+                activeThreadId: ws.data.session?.currentThreadId ?? "",
+                runtime,
+              });
+            }
+          }
+
+          flushRuntimeIntents(ws, agent);
+          break;
+        }
+
+        case "runtime:command": {
+          const runtime = agent.getRuntime();
+          await runtime.emit({ type: "ui:command", commandId: msg.commandId, args: msg.args });
+
+          const cmd = runtime.getCommand(msg.commandId);
+          if (cmd) {
+            await cmd.execute({
+              sessionId: ws.data.sessionId ?? "",
+              activeThreadId: ws.data.session?.currentThreadId ?? "",
+              runtime,
+            });
+          }
+
+          flushRuntimeIntents(ws, agent);
+
+          // Server-side effects for commands that need access to the
+          // agent/session/store — the extension handles UI intents (notify,
+          // openPanel) but these operations require server-level access.
+          await handleCommandSideEffects(ws, msg.commandId);
           break;
         }
 

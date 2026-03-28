@@ -10,6 +10,9 @@ import type {
   SkillStatus,
   HistoricalMessage,
   TodoItem,
+  RuntimeShortcutMeta,
+  RuntimeCommandMeta,
+  RuntimePanelMeta,
 } from "@dough/protocol";
 
 type EventHandler = (event: DoughEvent) => void;
@@ -25,6 +28,12 @@ type QueueUpdateHandler = (position: number) => void;
 type ThreadHistoryHandler = (threadId: string, messages: HistoricalMessage[]) => void;
 type TodosHandler = (todos: TodoItem[]) => void;
 type TodoVerificationRequestHandler = (todoId: string, title: string, instructions: string) => void;
+type ShortcutsHandler = (shortcuts: RuntimeShortcutMeta[]) => void;
+type CommandsHandler = (commands: RuntimeCommandMeta[]) => void;
+type PanelsHandler = (panels: RuntimePanelMeta[]) => void;
+type NotifyHandler = (message: string, level: "info" | "warning" | "error") => void;
+type StatusHandler = (entries: Record<string, string>) => void;
+type OpenPanelHandler = (panelId: string, data?: unknown) => void;
 
 export class DoughClient {
   private ws: WebSocket | null = null;
@@ -42,6 +51,12 @@ export class DoughClient {
   private threadHistoryHandlers = new Set<ThreadHistoryHandler>();
   private todosHandlers = new Set<TodosHandler>();
   private todoVerificationRequestHandlers = new Set<TodoVerificationRequestHandler>();
+  private shortcutsHandlers = new Set<ShortcutsHandler>();
+  private commandsHandlers = new Set<CommandsHandler>();
+  private panelsHandlers = new Set<PanelsHandler>();
+  private notifyHandlers = new Set<NotifyHandler>();
+  private statusHandlers = new Set<StatusHandler>();
+  private openPanelHandlers = new Set<OpenPanelHandler>();
 
   constructor(private serverUrl: string = "ws://localhost:4200/ws") {}
 
@@ -54,7 +69,7 @@ export class DoughClient {
         resolve();
       };
 
-      this.ws.onerror = (e) => {
+      this.ws.onerror = (_e) => {
         reject(new Error("WebSocket connection failed"));
       };
 
@@ -104,6 +119,25 @@ export class DoughClient {
             break;
           case "error":
             for (const h of this.errorHandlers) h(msg.message, msg.code);
+            break;
+          // Runtime UI intents
+          case "runtime:shortcuts":
+            for (const h of this.shortcutsHandlers) h(msg.shortcuts);
+            break;
+          case "runtime:commands":
+            for (const h of this.commandsHandlers) h(msg.commands);
+            break;
+          case "runtime:panels":
+            for (const h of this.panelsHandlers) h(msg.panels);
+            break;
+          case "runtime:notify":
+            for (const h of this.notifyHandlers) h(msg.message, msg.level);
+            break;
+          case "runtime:status":
+            for (const h of this.statusHandlers) h(msg.entries);
+            break;
+          case "runtime:open_panel":
+            for (const h of this.openPanelHandlers) h(msg.panelId, msg.data);
             break;
         }
       };
@@ -253,6 +287,50 @@ export class DoughClient {
   onTodoVerificationRequest(handler: TodoVerificationRequestHandler): () => void {
     this.todoVerificationRequestHandlers.add(handler);
     return () => this.todoVerificationRequestHandlers.delete(handler);
+  }
+
+  // ── Runtime commands ─────────────────────────────────────────
+
+  requestContributions(): void {
+    this.sendMessage({ kind: "runtime:get_contributions" });
+  }
+
+  triggerShortcut(shortcutId: string): void {
+    this.sendMessage({ kind: "runtime:shortcut_triggered", shortcutId });
+  }
+
+  executeRuntimeCommand(commandId: string, args?: Record<string, unknown>): void {
+    this.sendMessage({ kind: "runtime:command", commandId, args });
+  }
+
+  onShortcuts(handler: ShortcutsHandler): () => void {
+    this.shortcutsHandlers.add(handler);
+    return () => this.shortcutsHandlers.delete(handler);
+  }
+
+  onCommands(handler: CommandsHandler): () => void {
+    this.commandsHandlers.add(handler);
+    return () => this.commandsHandlers.delete(handler);
+  }
+
+  onPanels(handler: PanelsHandler): () => void {
+    this.panelsHandlers.add(handler);
+    return () => this.panelsHandlers.delete(handler);
+  }
+
+  onNotify(handler: NotifyHandler): () => void {
+    this.notifyHandlers.add(handler);
+    return () => this.notifyHandlers.delete(handler);
+  }
+
+  onStatus(handler: StatusHandler): () => void {
+    this.statusHandlers.add(handler);
+    return () => this.statusHandlers.delete(handler);
+  }
+
+  onOpenPanel(handler: OpenPanelHandler): () => void {
+    this.openPanelHandlers.add(handler);
+    return () => this.openPanelHandlers.delete(handler);
   }
 
   disconnect(): void {

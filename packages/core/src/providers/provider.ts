@@ -53,6 +53,10 @@ export interface SendOptions {
 /**
  * LLM provider abstraction. Implement this to add support
  * for any LLM backend (Claude, Codex, Gemini, local models, etc.)
+ *
+ * @deprecated Use `AgentClient` from `@dough/core/runtime` for new provider
+ * implementations. LLMProvider is retained for backward compatibility and
+ * can be adapted via `wrapLLMProviderAsClient()`.
  */
 export interface LLMProvider {
   readonly name: string;

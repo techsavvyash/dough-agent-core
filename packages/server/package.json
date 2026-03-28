@@ -11,10 +11,6 @@
   "dependencies": {
     "@dough/core": "workspace:*",
     "@dough/protocol": "workspace:*",
-    "@dough/threads": "workspace:*",
-    "diff": "^8.0.3"
-  },
-  "devDependencies": {
-    "@types/diff": "^8.0.0"
+    "@dough/threads": "workspace:*"
   }
 }

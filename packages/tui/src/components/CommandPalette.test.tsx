@@ -3,7 +3,18 @@ import { testRender } from "@opentui/react/test-utils";
 import { createSpy } from "@opentui/core/testing";
 import type { ParsedKey } from "@opentui/core";
 import { act } from "react";
-import { CommandPalette, COMMANDS } from "./CommandPalette.tsx";
+import { CommandPalette, type Command } from "./CommandPalette.tsx";
+
+/** Test fixture — mirrors the shape of runtime-contributed commands. */
+const TEST_COMMANDS: Command[] = [
+  { name: "/thread info",  description: "Show current thread details",              value: "thread_info" },
+  { name: "/thread list",  description: "View thread tree (Ctrl+T)",                value: "thread_list" },
+  { name: "/thread fork",  description: "Fork current thread into a new branch",    value: "thread_fork" },
+  { name: "/thread new",   description: "Start a fresh thread (old threads preserved)", value: "thread_new" },
+  { name: "/clear",        description: "Clear the chat display",                   value: "clear" },
+  { name: "/compact",      description: "Summarize and handoff to fresh thread",    value: "compact" },
+  { name: "/exit",         description: "Exit Dough",                               value: "exit" },
+];
 
 /** Synthetic escape key — bypasses stdin parser debounce for reliable CI testing */
 const ESCAPE_KEY: ParsedKey = {
@@ -18,7 +29,7 @@ describe("CommandPalette", () => {
     const onClose = createSpy();
 
     const { captureCharFrame, renderOnce } = await testRender(
-      <CommandPalette commands={COMMANDS} onSelect={onSelect} onClose={onClose} />,
+      <CommandPalette commands={TEST_COMMANDS} onSelect={onSelect} onClose={onClose} />,
       { width: 80, height: 20 }
     );
     await renderOnce();
@@ -39,7 +50,7 @@ describe("CommandPalette", () => {
     const onClose = createSpy();
 
     const { captureCharFrame, renderOnce } = await testRender(
-      <CommandPalette commands={COMMANDS} onSelect={onSelect} onClose={onClose} />,
+      <CommandPalette commands={TEST_COMMANDS} onSelect={onSelect} onClose={onClose} />,
       { width: 80, height: 20 }
     );
     await renderOnce();
@@ -54,7 +65,7 @@ describe("CommandPalette", () => {
     const onClose = createSpy();
 
     const { captureCharFrame, mockInput, renderOnce } = await testRender(
-      <CommandPalette commands={COMMANDS} onSelect={onSelect} onClose={onClose} />,
+      <CommandPalette commands={TEST_COMMANDS} onSelect={onSelect} onClose={onClose} />,
       { width: 80, height: 20 }
     );
     await renderOnce();
@@ -73,7 +84,7 @@ describe("CommandPalette", () => {
     const onClose = createSpy();
 
     const { renderer, renderOnce } = await testRender(
-      <CommandPalette commands={COMMANDS} onSelect={onSelect} onClose={onClose} />,
+      <CommandPalette commands={TEST_COMMANDS} onSelect={onSelect} onClose={onClose} />,
       { width: 80, height: 20 }
     );
     await renderOnce();
@@ -91,7 +102,7 @@ describe("CommandPalette", () => {
     const onClose = createSpy();
 
     const { mockInput, renderOnce } = await testRender(
-      <CommandPalette commands={COMMANDS} onSelect={onSelect} onClose={onClose} />,
+      <CommandPalette commands={TEST_COMMANDS} onSelect={onSelect} onClose={onClose} />,
       { width: 80, height: 20 }
     );
     await renderOnce();
@@ -109,7 +120,7 @@ describe("CommandPalette", () => {
     const onClose = createSpy();
 
     const { mockInput, renderOnce } = await testRender(
-      <CommandPalette commands={COMMANDS} onSelect={onSelect} onClose={onClose} />,
+      <CommandPalette commands={TEST_COMMANDS} onSelect={onSelect} onClose={onClose} />,
       { width: 80, height: 20 }
     );
     await renderOnce();
@@ -128,7 +139,7 @@ describe("CommandPalette", () => {
     const onClose = createSpy();
 
     const { mockInput, renderOnce } = await testRender(
-      <CommandPalette commands={COMMANDS} onSelect={onSelect} onClose={onClose} />,
+      <CommandPalette commands={TEST_COMMANDS} onSelect={onSelect} onClose={onClose} />,
       { width: 80, height: 20 }
     );
     await renderOnce();
@@ -146,7 +157,7 @@ describe("CommandPalette", () => {
 
   test("shows help text", async () => {
     const { captureCharFrame, renderOnce } = await testRender(
-      <CommandPalette commands={COMMANDS} onSelect={createSpy()} onClose={createSpy()} />,
+      <CommandPalette commands={TEST_COMMANDS} onSelect={createSpy()} onClose={createSpy()} />,
       { width: 80, height: 20 }
     );
     await renderOnce();

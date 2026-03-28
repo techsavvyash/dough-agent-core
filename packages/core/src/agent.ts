@@ -20,6 +20,11 @@ import { createAttributionMiddleware } from "./git-attribution.ts";
 import { TodoManager } from "./todos/manager.ts";
 import { TodoVerifier } from "./todos/verifier.ts";
 import type { TodoStore } from "./todos/store.ts";
+import { PlatformRuntime } from "./runtime/runtime.ts";
+import { wrapLLMProviderAsClient } from "./providers/adapter.ts";
+import { createGitPolicyExtension } from "./runtime/extensions/git-policy.ts";
+import { createDiffCheckpointExtension } from "./runtime/extensions/diff-checkpoint.ts";
+import { createSessionCommandsExtension } from "./runtime/extensions/session-commands.ts";
 
 export interface DoughAgentConfig {
   provider: "claude" | "codex" | LLMProvider;
@@ -84,12 +89,16 @@ export class DoughAgent {
    * created by this agent.
    */
   private readonly toolMiddleware: ToolMiddleware[];
+  private readonly runtime: PlatformRuntime;
+  private runtimeInitPromise: Promise<void> | null = null;
 
   constructor(config: DoughAgentConfig) {
     this.config = config;
 
-    // Build the platform middleware stack. Attribution is always present —
-    // it's a core Dough invariant, not an opt-in feature.
+    // Attribution middleware hooks into the Claude SDK's PreToolUse, modifying
+    // tool input BEFORE execution. The git-policy extension's tool:call rewrite
+    // only changes the yielded event, not what the SDK actually runs. Both layers
+    // are needed until runtime events can feed back into the SDK's hook system.
     this.toolMiddleware = [
       createAttributionMiddleware(),
       ...(config.toolMiddleware ?? []),
@@ -144,8 +153,8 @@ export class DoughAgent {
 
       // Register the todos MCP server so the LLM can call TodoWrite/TodoRead/TodoComplete.
       // The server script is co-located in this package; env vars pass the db path.
-      // Session ID is "default" at agent level; the WS handler overrides it per-connection
-      // by re-registering with the real session ID when one is established.
+      // Session ID is "default" at agent level; the WS handler calls
+      // runtime.setSession() with the real session ID when one is established.
       const mcpServerPath = import.meta.dirname + "/todos/mcp-server.ts";
       // Derive the db path from the store if it's a SqliteTodoStore (has a dbPath prop)
       const dbPath =
@@ -171,6 +180,17 @@ export class DoughAgent {
         return ctx;
       });
     }
+
+    // Create the platform runtime and register the provider as a client.
+    // Built-in extensions are registered here; initialization happens lazily
+    // on the first session() call so async setup can complete.
+    this.runtime = new PlatformRuntime({ cwd: config.cwd });
+    this.runtime.registerClient(wrapLLMProviderAsClient(this.provider));
+
+    // Register built-in extensions
+    this.runtime.registerExtension(createGitPolicyExtension());
+    this.runtime.registerExtension(createDiffCheckpointExtension());
+    this.runtime.registerExtension(createSessionCommandsExtension());
   }
 
   /**
@@ -198,9 +218,17 @@ export class DoughAgent {
     return parts.length > 0 ? parts.join("\n\n") : undefined;
   }
 
+  private async ensureRuntimeInitialized(): Promise<void> {
+    if (!this.runtimeInitPromise) {
+      this.runtimeInitPromise = this.runtime.initialize();
+    }
+    await this.runtimeInitPromise;
+  }
+
   async session(options?: { id?: string }): Promise<DoughSession> {
     const sessionId = options?.id ?? crypto.randomUUID();
     const systemPrompt = await this.resolveSystemPrompt();
+    await this.ensureRuntimeInitialized();
 
     return new DoughSession(sessionId, {
       provider: this.provider,
@@ -208,6 +236,7 @@ export class DoughAgent {
       systemPrompt,
       model: this.config.model,
       toolMiddleware: this.toolMiddleware,
+      runtime: this.runtime,
     });
   }
 
@@ -226,6 +255,7 @@ export class DoughAgent {
     providerSessionId?: string
   ): Promise<DoughSession> {
     const systemPrompt = await this.resolveSystemPrompt();
+    await this.ensureRuntimeInitialized();
 
     // Restore the provider-native session ID so the next query() call
     // passes `resume: <id>` and the SDK reloads the full conversation.
@@ -239,9 +269,14 @@ export class DoughAgent {
       systemPrompt,
       model: this.config.model,
       toolMiddleware: this.toolMiddleware,
+      runtime: this.runtime,
     });
     session.resumeThread(activeThreadId);
     return session;
+  }
+
+  getRuntime(): PlatformRuntime {
+    return this.runtime;
   }
 
   getThreadManager(): ThreadManager {

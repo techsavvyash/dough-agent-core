@@ -14,11 +14,48 @@ export type { AgentsMdEntry, AgentsMdResult, LoadOptions as AgentsMdLoadOptions 
 export { McpManager } from "./mcp/manager.ts";
 export { SkillManager } from "./skills/manager.ts";
 export { discoverSkills, loadSkill } from "./skills/loader.ts";
-export {
-  ATTRIBUTION_TRAILER,
-  isGitCommitCommand,
-  appendAttributionTrailer,
-  createAttributionMiddleware,
-} from "./git-attribution.ts";
 export { TodoManager, TodoVerifier, MemoryTodoStore, SqliteTodoStore } from "./todos/index.ts";
 export type { TodoStore, CompleteResult, VerificationResult } from "./todos/index.ts";
+
+// ── Platform Runtime ────────────────────────────────────────────
+export {
+  PlatformRuntime,
+  EventBus,
+  createToolCallEvent,
+  createToolResultEvent,
+  createSessionBeforeCompactEvent,
+} from "./runtime/index.ts";
+export type {
+  PlatformRuntimeConfig,
+  Notification,
+  PanelOpenIntent,
+  PlatformEventHandler,
+  ErrorHandler,
+  PlatformEvent,
+  PlatformEventType,
+  PlatformEventOfType,
+  RuntimeExtension,
+  PlatformAPI,
+  RuntimeCommand,
+  RuntimeShortcut,
+  RuntimePanel,
+  RuntimeTool,
+  CommandContext,
+  AgentClient,
+  ClientCapabilities,
+  ClientSessionState,
+  ClientTurnRequest,
+} from "./runtime/index.ts";
+export { wrapLLMProviderAsClient } from "./providers/adapter.ts";
+export {
+  createGitPolicyExtension,
+  createDiffCheckpointExtension,
+  createSessionCommandsExtension,
+  FileTracker,
+} from "./runtime/index.ts";
+export type {
+  GitPolicyConfig,
+  DiffCheckpointExtensionInstance,
+  FileTrackerPersistence,
+  FileTrackerOptions,
+} from "./runtime/index.ts";

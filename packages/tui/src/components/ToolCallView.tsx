@@ -117,7 +117,7 @@ function formatToolName(name: string): string {
   return labels[name] ?? name;
 }
 
-function formatArgs(name: string, args: Record<string, unknown>): string {
+function formatArgs(_name: string, args: Record<string, unknown>): string {
   if (args.file_path || args.path || args.filePath) {
     const p = String(args.file_path ?? args.path ?? args.filePath);
     const parts = p.split("/").filter(Boolean);

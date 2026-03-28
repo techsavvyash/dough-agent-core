@@ -1,11 +1,10 @@
-import { test, expect, beforeEach, describe } from "bun:test";
+import { test, expect, describe } from "bun:test";
 import { ThreadManager } from "./manager.ts";
 import { MemoryThreadStore } from "./stores/memory.ts";
 import type {
   ThreadMessage,
   TokenCounter,
   SummaryGenerator,
-  ThreadManagerConfig,
 } from "./types.ts";
 import { DoughEventType } from "@dough/protocol";
 

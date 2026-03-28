@@ -20,16 +20,24 @@ export class CodexProvider implements LLMProvider {
 
   private mcpServers: McpServerMap = {};
 
+  // @ts-expect-error reserved for future codex-sdk integration
+  private options: {
+    model?: string;
+    env?: Record<string, string>;
+  };
+
   constructor(
-    private options: {
+    options: {
       model?: string;
       env?: Record<string, string>;
     } = {}
-  ) {}
+  ) {
+    this.options = options;
+  }
 
   async *send(
-    messages: ThreadMessage[],
-    options: SendOptions
+    _messages: ThreadMessage[],
+    _options: SendOptions
   ): AsyncGenerator<DoughEvent> {
     // TODO: Implement using codex-sdk
     // const codex = new Codex({ env: this.options.env });
@@ -70,7 +78,7 @@ export class CodexProvider implements LLMProvider {
     );
   }
 
-  async createSession(options?: {
+  async createSession(_options?: {
     sessionId?: string;
     model?: string;
   }): Promise<string> {

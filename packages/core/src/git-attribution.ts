@@ -8,14 +8,15 @@
  * Two-layer safety net:
  *
  * 1. PRIMARY — createAttributionMiddleware() → ToolMiddleware
- *    Provider-agnostic. Fires BEFORE the Bash tool executes (via the
- *    provider's native PreToolUse hook). Rewrites the git commit command to
+ *    Provider-agnostic. Configured on DoughAgent and applied via each
+ *    provider's native PreToolUse hook. Rewrites the git commit command to
  *    include `--trailer "Co-Authored-By: Dough Agent ..."` so attribution is
  *    baked in at commit-creation time, not patched after the fact.
  *
  * 2. FALLBACK — appendAttributionTrailer(cwd)
- *    Called by ws-handler after a ToolCallResponse. Handles edge cases where
- *    the pre-hook couldn't inject (e.g. --amend commits, SDK version gaps).
+ *    Called by the git-policy extension's tool:result handler. Handles edge
+ *    cases where the pre-hook couldn't inject (e.g. --amend commits, SDK
+ *    version gaps).
  */
 import type { ToolMiddleware } from "./providers/provider.ts";
 

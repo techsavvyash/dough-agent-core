@@ -1,5 +1,4 @@
 import { DoughAgent, SqliteTodoStore } from "@dough/core";
-import { FileTracker } from "./file-tracker.ts";
 import { createWSHandler, type WSData } from "./ws-handler.ts";
 import { initDoughStorage, getDoughDir } from "./storage.ts";
 import { join } from "node:path";
@@ -33,7 +32,6 @@ const server = Bun.serve<WSData>({
         data: {
           sessionId: url.searchParams.get("session"),
           session: null,
-          fileTracker: new FileTracker(),
           sendQueue: [] as { prompt: string; attachments?: import("@dough/protocol").Attachment[] }[],
           isProcessingQueue: false,
           pendingManualVerifications: new Map(),

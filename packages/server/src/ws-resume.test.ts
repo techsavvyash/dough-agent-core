@@ -16,7 +16,7 @@ import { HybridThreadStore } from "@dough/threads";
 import { DoughEventType } from "@dough/protocol";
 import type { ServerMessage } from "@dough/protocol";
 import { createWSHandler, type WSData } from "./ws-handler.ts";
-import { FileTracker } from "./file-tracker.ts";
+import { PlatformRuntime, createDiffCheckpointExtension } from "@dough/core";
 
 // ---------------------------------------------------------------------------
 // Minimal mock agent — satisfies the interface createWSHandler needs
@@ -33,11 +33,15 @@ function buildMockSession(id: string, threadId: string) {
   };
 }
 
-function buildMockAgent(sessionId: string, threadId: string) {
+async function buildMockAgent(sessionId: string, threadId: string) {
   const session = buildMockSession(sessionId, threadId);
+  const runtime = new PlatformRuntime({ cwd: "/tmp" });
+  runtime.registerExtension(createDiffCheckpointExtension());
+  await runtime.initialize();
   return {
     session: async () => session,
     resumeSession: async (id: string, tid?: string) => buildMockSession(id, tid ?? threadId),
+    getRuntime: () => runtime,
     getThreadManager: () => ({
       listThreads: async () => [],
       getThread: async () => null,
@@ -79,8 +83,8 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-function startServer(sessionId: string, threadId: string): number {
-  const agent = buildMockAgent(sessionId, threadId);
+async function startServer(sessionId: string, threadId: string): Promise<number> {
+  const agent = await buildMockAgent(sessionId, threadId);
   const wsHandler = createWSHandler(agent, store, store);
 
   server = Bun.serve<WSData>({
@@ -91,7 +95,6 @@ function startServer(sessionId: string, threadId: string): number {
           data: {
             sessionId: null,
             session: null,
-            fileTracker: new FileTracker(),
             sendQueue: [] as { prompt: string; attachments?: import("@dough/protocol").Attachment[] }[],
             isProcessingQueue: false,
             pendingManualVerifications: new Map(),
@@ -104,7 +107,7 @@ function startServer(sessionId: string, threadId: string): number {
     websocket: wsHandler,
   });
 
-  return server.port;
+  return server.port!;
 }
 
 /**
@@ -179,7 +182,7 @@ test("resume: ChangeStatsUpdate received when file_diffs are in DB", async () =>
     updatedAt: new Date().toISOString(),
   });
 
-  const port = startServer(SESSION_ID, THREAD_ID);
+  const port = await startServer(SESSION_ID, THREAD_ID);
 
   const messages = await collectMessages(port, (ws, done) => {
     send(ws, { kind: "resume", sessionId: SESSION_ID });
@@ -221,7 +224,7 @@ test("resume: no ChangeStatsUpdate when file_diffs table is empty", async () => 
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   });
 
-  const port = startServer(SESSION_ID, THREAD_ID);
+  const port = await startServer(SESSION_ID, THREAD_ID);
 
   const messages = await collectMessages(port, (ws, done) => {
     send(ws, { kind: "resume", sessionId: SESSION_ID });
@@ -257,7 +260,7 @@ test("resume → get_diffs: hydrated diff payload contains correct data", async 
     updatedAt: new Date().toISOString(),
   });
 
-  const port = startServer(SESSION_ID, THREAD_ID);
+  const port = await startServer(SESSION_ID, THREAD_ID);
 
   const messages = await collectMessages(port, (ws, done) => {
     send(ws, { kind: "resume", sessionId: SESSION_ID });
@@ -318,7 +321,7 @@ test("resume: multiple file diffs all hydrate — correct count and wire order",
     });
   }
 
-  const port = startServer(SESSION_ID, THREAD_ID);
+  const port = await startServer(SESSION_ID, THREAD_ID);
 
   const messages = await collectMessages(port, (ws, done) => {
     send(ws, { kind: "resume", sessionId: SESSION_ID });
@@ -348,7 +351,7 @@ test("resume: multiple file diffs all hydrate — correct count and wire order",
 });
 
 test("SESSION_NOT_FOUND error when session not in DB", async () => {
-  const port = startServer("irrelevant", "irrelevant");
+  const port = await startServer("irrelevant", "irrelevant");
 
   const messages = await collectMessages(port, (ws, done) => {
     send(ws, { kind: "resume", sessionId: "ghost-session" });

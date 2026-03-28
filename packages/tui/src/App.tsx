@@ -5,6 +5,7 @@ import { DoughClient } from "./client.ts";
 import { useSession } from "./hooks/useSession.ts";
 import { useChangeStats } from "./hooks/useChangeStats.ts";
 import { useThreads } from "./hooks/useThreads.ts";
+import { useRuntimeContributions } from "./hooks/useRuntimeContributions.ts";
 import { loadLastSessionId, saveLastSessionId } from "./utils/sessionStore.ts";
 import { Header } from "./components/Header.tsx";
 import { ChatView } from "./components/ChatView.tsx";
@@ -12,10 +13,7 @@ import { Composer } from "./components/Composer.tsx";
 import { DiffView } from "./components/DiffView.tsx";
 import { ThreadViewer } from "./components/ThreadViewer.tsx";
 import { BashOutputView, type BashCallEntry } from "./components/BashOutputView.tsx";
-import {
-  CommandPalette,
-  COMMANDS,
-} from "./components/CommandPalette.tsx";
+import { CommandPalette } from "./components/CommandPalette.tsx";
 import { colors } from "./theme.ts";
 
 interface AppProps {
@@ -40,8 +38,9 @@ export function App({ serverUrl, provider, model }: AppProps) {
   } = useSession(client);
   const { stats, diffPayload, requestDiffs, clearDiffs, hasChanges } =
     useChangeStats(client);
-  const { threads, requestThreads, requestAllThreads } = useThreads(client);
-  const { height: termHeight } = useTerminalDimensions();
+  const { threads, requestAllThreads } = useThreads(client);
+  const { shortcuts, commands } = useRuntimeContributions(client);
+  const { height: _termHeight } = useTerminalDimensions();
   const [initError, setInitError] = useState<string | null>(null);
   const [showPalette, setShowPalette] = useState(false);
   const [showDiffView, setShowDiffView] = useState(false);
@@ -67,26 +66,56 @@ export function App({ serverUrl, provider, model }: AppProps) {
 
   const noOverlay = !showPalette && !showDiffView && !showThreadViewer && !showBashOutput;
 
-  // Ctrl+D to enter diff mode
+  // Dynamic keyboard shortcuts from runtime contributions
   useKeyboard((key) => {
-    if (key.ctrl && key.name === "d" && noOverlay) {
-      if (hasChanges) {
-        requestDiffs();
-        setShowDiffView(true);
-      }
-    }
-    // Ctrl+T to open thread viewer
-    if (key.ctrl && key.name === "t" && noOverlay) {
-      requestAllThreads();
-      setShowThreadViewer(true);
-    }
-    // Ctrl+O to open bash output viewer
-    if (key.ctrl && key.name === "o" && noOverlay) {
-      if (bashCalls.length > 0) {
-        setShowBashOutput(true);
-      }
-    }
+    if (!noOverlay) return;
+
+    // Build the key string to match against runtime shortcuts
+    const parts: string[] = [];
+    if (key.ctrl) parts.push("ctrl");
+    if (key.meta) parts.push("meta");
+    if (key.name) parts.push(key.name);
+    const keyStr = parts.join("+");
+
+    const matched = shortcuts.find((s) => s.key === keyStr);
+    if (!matched) return;
+
+    // Delegate all shortcuts to the server — the server executes the linked
+    // command and sends back UI intents (runtime:open_panel, runtime:notify)
+    // which the onOpenPanel/onNotify listeners handle.
+    client.triggerShortcut(matched.id);
   });
+
+  // Listen for runtime panel open intents from the server
+  useEffect(() => {
+    return client.onOpenPanel((panelId) => {
+      switch (panelId) {
+        case "diff.panel":
+          requestDiffs();
+          setShowDiffView(true);
+          break;
+        case "threads.panel":
+          requestAllThreads();
+          setShowThreadViewer(true);
+          break;
+        case "bash.panel":
+          if (bashCalls.length > 0) setShowBashOutput(true);
+          break;
+      }
+    });
+  }, [client, requestDiffs, requestAllThreads, bashCalls.length]);
+
+  // Listen for runtime notifications and display them as system messages
+  useEffect(() => {
+    return client.onNotify((message, _level) => {
+      // Special signal from session-commands extension to clear chat
+      if (message === "__clear__") {
+        clearMessages();
+        return;
+      }
+      addSystemMessage(message);
+    });
+  }, [client, addSystemMessage, clearMessages]);
 
   // Persist session ID whenever a new session is received
   useEffect(() => {
@@ -136,6 +165,36 @@ export function App({ serverUrl, provider, model }: AppProps) {
     return () => client.disconnect();
   }, [client, provider, model]);
 
+  // Build command palette items from runtime contributions
+  const paletteCommands = useMemo(
+    () =>
+      commands.map((c) => ({
+        name: c.name,
+        description: c.description,
+        value: c.id,
+      })),
+    [commands]
+  );
+
+  const executeCommand = useCallback(
+    (commandId: string) => {
+      setShowPalette(false);
+
+      // Exit is inherently local — must terminate the TUI process
+      if (commandId === "session.exit") {
+        process.exit(0);
+        return;
+      }
+
+      // All other commands delegate to the server. The server executes the
+      // command handler, performs any side-effects (fork, new session, compact),
+      // and sends back UI intents (runtime:notify, runtime:open_panel) that
+      // the onNotify/onOpenPanel listeners handle.
+      client.executeRuntimeCommand(commandId);
+    },
+    [client]
+  );
+
   const handleSubmit = useCallback(
     (text: string, attachments?: Attachment[]) => {
       // Slash commands open palette or execute directly (no attachments)
@@ -146,81 +205,24 @@ export function App({ serverUrl, provider, model }: AppProps) {
 
       // Handle inline slash commands
       if (text.startsWith("/") && !attachments?.length) {
-        const cmd = text.slice(1).trim().toLowerCase();
-        executeCommand(cmd);
+        const rawCmd = text.slice(1).trim().toLowerCase();
+        // Find matching runtime command by name or id suffix
+        const matched = commands.find(
+          (c) =>
+            c.name.replace(/^\//, "").toLowerCase() === rawCmd ||
+            c.id.split(".").pop() === rawCmd
+        );
+        if (matched) {
+          executeCommand(matched.id);
+        } else {
+          addSystemMessage(`Unknown command: ${rawCmd}`);
+        }
         return;
       }
 
       send(text, attachments);
     },
-    [send]
-  );
-
-  const executeCommand = useCallback(
-    (cmd: string) => {
-      setShowPalette(false);
-
-      switch (cmd) {
-        case "thread_info":
-        case "thread info": {
-          const threadId = session?.activeThreadId ?? "unknown";
-          const sessionId = session?.id ?? "unknown";
-          addSystemMessage(
-            `Thread: ${threadId}\nSession: ${sessionId}\nProvider: ${session?.provider ?? "unknown"}\nModel: ${session?.model ?? "default"}`
-          );
-          break;
-        }
-
-        case "thread_fork":
-        case "thread fork": {
-          if (session?.activeThreadId) {
-            client.fork(session.activeThreadId);
-            addSystemMessage("Forking current thread...");
-          } else {
-            addSystemMessage("No active thread to fork.");
-          }
-          break;
-        }
-
-        case "thread_new":
-        case "thread new": {
-          client.createSession(provider, model);
-          clearMessages();
-          addSystemMessage("Started new thread.");
-          break;
-        }
-
-        case "clear": {
-          clearMessages();
-          break;
-        }
-
-        case "compact": {
-          addSystemMessage(
-            "Compacting: summarizing context and handing off to new thread..."
-          );
-          send("/compact");
-          break;
-        }
-
-        case "thread_list":
-        case "thread list": {
-          // Fetch all threads across all sessions (not just the current one)
-          requestAllThreads();
-          setShowThreadViewer(true);
-          break;
-        }
-
-        case "exit": {
-          process.exit(0);
-          break;
-        }
-
-        default:
-          addSystemMessage(`Unknown command: ${cmd}`);
-      }
-    },
-    [session, client, provider, model, send, clearMessages, addSystemMessage, requestThreads, requestAllThreads]
+    [send, commands, addSystemMessage, executeCommand]
   );
 
   const handlePaletteSelect = useCallback(
@@ -305,7 +307,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
       {/* ── Command palette ────────────────────── inline above composer, scrollbox shrinks */}
       {showPalette && (
         <CommandPalette
-          commands={COMMANDS}
+          commands={paletteCommands}
           onSelect={handlePaletteSelect}
           onClose={() => setShowPalette(false)}
         />

@@ -31,3 +31,8 @@ export type {
   TodoReadArgs,
   TodoCompleteArgs,
 } from "./todos.ts";
+export type {
+  RuntimeShortcutMeta,
+  RuntimeCommandMeta,
+  RuntimePanelMeta,
+} from "./runtime.ts";

@@ -4,6 +4,7 @@ import type { DiffPayload } from "./snapshots.ts";
 import type { McpServerConfig, McpServerStatus } from "./mcp.ts";
 import type { SkillStatus } from "./skills.ts";
 import type { TodoItem } from "./todos.ts";
+import type { RuntimeShortcutMeta, RuntimeCommandMeta, RuntimePanelMeta } from "./runtime.ts";
 
 /** A tool call persisted alongside an assistant message for history replay. */
 export interface HistoricalToolCall {
@@ -61,7 +62,11 @@ export type ClientMessage =
   | { kind: "skill_activate"; name: string }
   // Todos
   | { kind: "todos_list"; sessionId: string }
-  | { kind: "todo_verify"; todoId: string; approved: boolean };
+  | { kind: "todo_verify"; todoId: string; approved: boolean }
+  // Runtime interactions (client → server)
+  | { kind: "runtime:get_contributions" }
+  | { kind: "runtime:shortcut_triggered"; shortcutId: string }
+  | { kind: "runtime:command"; commandId: string; args?: Record<string, unknown> };
 
 // Server → Client
 export type ServerMessage =
@@ -89,4 +94,11 @@ export type ServerMessage =
   | { kind: "thread_history"; threadId: string; messages: HistoricalMessage[] }
   // Todos
   | { kind: "todos_update"; todos: TodoItem[] }
-  | { kind: "todo_verification_request"; todoId: string; title: string; instructions: string };
+  | { kind: "todo_verification_request"; todoId: string; title: string; instructions: string }
+  // Runtime UI intents (server → client)
+  | { kind: "runtime:shortcuts"; shortcuts: RuntimeShortcutMeta[] }
+  | { kind: "runtime:commands"; commands: RuntimeCommandMeta[] }
+  | { kind: "runtime:panels"; panels: RuntimePanelMeta[] }
+  | { kind: "runtime:notify"; message: string; level: "info" | "warning" | "error" }
+  | { kind: "runtime:status"; entries: Record<string, string> }
+  | { kind: "runtime:open_panel"; panelId: string; data?: unknown };
