@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import type { ToolCallEntry } from "../hooks/useSession.ts";
 import { colors, symbols } from "../theme.ts";
 
@@ -22,6 +23,17 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
   const { name, args, status, result, output } = toolCall;
   const accent = selected ? colors.accent : statusColor(status);
 
+  // Animated spinner for pending tool calls
+  const [spinFrame, setSpinFrame] = useState(0);
+  useEffect(() => {
+    if (status !== "pending") return;
+    const id = setInterval(
+      () => setSpinFrame((f) => (f + 1) % symbols.spinnerFrames.length),
+      80,
+    );
+    return () => clearInterval(id);
+  }, [status]);
+
   const isBash = name === "Bash" || name === "bash" || name === "execute";
   const bashCommand = isBash && args.command ? String(args.command) : null;
   const argSummary = bashCommand ? null : formatArgs(name, args);
@@ -42,12 +54,23 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
         <text fg={accent}>{symbols.hrule + " "}</text>
         {isBash ? (
           <box flexDirection="row">
-            <text fg={colors.success}>{"$ "}</text>
+            {status === "pending" ? (
+              <text fg={colors.warning}>
+                {(symbols.spinnerFrames[spinFrame] ?? symbols.spinnerFrames[0]!) + " "}
+              </text>
+            ) : (
+              <text fg={statusColor(status)}>{statusIcon(status) + " "}</text>
+            )}
+            <text fg={colors.textMuted}>{"$ "}</text>
             <text fg={colors.text}>{bashCommand ?? ""}</text>
           </box>
         ) : (
           <box flexDirection="row">
-            <text fg={accent}>{statusIcon(status) + " "}</text>
+            <text fg={accent}>
+              {status === "pending"
+                ? (symbols.spinnerFrames[spinFrame] ?? symbols.spinnerFrames[0]!) + " "
+                : statusIcon(status) + " "}
+            </text>
             <text fg={colors.textDim}>{label}</text>
             {argSummary ? <text fg={colors.textMuted}>{"  " + argSummary}</text> : null}
           </box>
