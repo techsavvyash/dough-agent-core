@@ -192,7 +192,7 @@ export function Composer({
     footerParts.push("Esc cancel");
     footerParts.push("Enter queues");
   } else {
-    footerParts.push("? commands");
+    footerParts.push("/ commands");
     footerParts.push("Ctrl+V image");
     footerParts.push("Ctrl+E editor");
     footerParts.push("Shift+Enter newline");
@@ -219,14 +219,14 @@ export function Composer({
 
   const footerLeft = footerParts.join(`  ${symbols.dot}  `);
   const footerRight = statsText;
-  // Pad so right-side text aligns to the right edge
+  // Always pad footer to the full terminal width so stale content from
+  // previous renders (e.g., a longer streaming state footer) is fully
+  // overwritten and never bleeds through.
   const footerGap = Math.max(
     1,
     width - 4 - footerLeft.length - footerRight.length
   );
-  const footer = footerRight
-    ? `${footerLeft}${" ".repeat(footerGap)}${footerRight}`
-    : footerLeft;
+  const footer = `${footerLeft}${" ".repeat(footerGap)}${footerRight}`;
 
   // Grows with content up to MAX_COMPOSER_LINES, then scrolls internally
   const visibleLines = Math.min(MAX_COMPOSER_LINES, inputLines);

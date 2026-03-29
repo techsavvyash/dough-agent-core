@@ -2,9 +2,6 @@ import { useState, useEffect } from "react";
 import type { ToolCallEntry } from "../hooks/useSession.ts";
 import { colors, symbols } from "../theme.ts";
 
-/** Number of output lines to show inline before truncating. */
-const PREVIEW_LINES = 6;
-
 interface ToolCallViewProps {
   toolCall: ToolCallEntry;
   selected?: boolean;
@@ -49,13 +46,11 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
   const argSummary = isBash || isAgent ? null : formatArgs(name, args);
   const label = formatToolName(name);
 
-  // Output preview (bash tools only)
+  // Full output for bash/agent tools
   const rawOutput = typeof output === "string" ? output : undefined;
-  const outputLines = rawOutput ? rawOutput.trimEnd().split("\n") : [];
-  const previewText = outputLines.slice(0, PREVIEW_LINES).join("\n");
-  const extraLines = Math.max(0, outputLines.length - PREVIEW_LINES);
+  const outputText = rawOutput ? rawOutput.trimEnd() : "";
   const showOutputPreview =
-    (isBash || isAgent) && outputLines.length > 0 && status !== "pending";
+    (isBash || isAgent) && outputText.length > 0 && status !== "pending";
 
   // Sub-steps from agent tool (parsed from output if JSON-like or plain lines)
   const agentSubSteps = isAgent && args.subSteps
@@ -112,19 +107,13 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
               </box>
             ))
           ) : (
-            /* Raw output preview */
-            <text fg={colors.textDim} wrapMode="char">{previewText}</text>
+            /* Full output — no truncation */
+            <text fg={colors.textDim} wrapMode="char">{outputText}</text>
           )}
-          {extraLines > 0 && (
-            <box flexDirection="row">
-              <text fg={colors.textMuted}>
-                {"…" +
-                  String(extraLines) +
-                  " more line" +
-                  (extraLines === 1 ? "" : "s") +
-                  "  "}
-              </text>
+          {isBash && (
+            <box flexDirection="row" height={1}>
               <text fg={colors.borderActive}>{"Ctrl+O"}</text>
+              <text fg={colors.textMuted}>{"  all commands"}</text>
             </box>
           )}
         </box>

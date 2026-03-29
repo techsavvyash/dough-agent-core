@@ -38,9 +38,9 @@ export function StatusBar({
   const modeLabel = APPROVAL_LABELS[approvalMode];
 
   return (
-    <box height={1} flexDirection="row" paddingX={1}>
+    <box height={1} flexDirection="row" paddingX={1} justifyContent="space-between">
       {/* Left side: git branch + model */}
-      <box flexDirection="row" flex={1}>
+      <box flexDirection="row">
         {gitBranch ? (
           <box flexDirection="row" marginRight={2}>
             <text fg={colors.accent}>{"⎇ "}</text>

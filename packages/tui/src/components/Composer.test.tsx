@@ -43,7 +43,7 @@ describe("Composer", () => {
     const frame = captureCharFrame();
 
     expect(frame).toContain("Type a message");
-    expect(frame).toContain("? commands");
+    expect(frame).toContain("/ commands");
   });
 
   test("shows thinking state when streaming", async () => {

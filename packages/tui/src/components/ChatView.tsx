@@ -9,7 +9,7 @@ interface ChatViewProps {
 
 export function ChatView({ messages, isStreaming }: ChatViewProps) {
   return (
-    <box flexDirection="column" paddingY={1}>
+    <box flexDirection="column" paddingTop={1} paddingBottom={2}>
       {messages.map((msg) => (
         /*
          * Each message sits in its own wrapper with bottom margin so there's

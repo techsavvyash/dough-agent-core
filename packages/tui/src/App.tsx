@@ -55,7 +55,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
   // the onSubmit handler and doesn't update when the React prop changes.
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
-  const { height: _termHeight } = useTerminalDimensions();
+  const { height: termHeight } = useTerminalDimensions();
   const [activeTheme, setActiveTheme] = useState<Theme>(THEMES[0]!);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
   const [initError, setInitError] = useState<string | null>(null);
@@ -386,12 +386,12 @@ export function App({ serverUrl, provider, model }: AppProps) {
   }
 
   return (
-    <box flexDirection="column" height="100%">
+    <box flexDirection="column" height={termHeight || 40}>
       {/* ── Header ─────────────────────────────── fixed top */}
       <Header session={session} connected={connected} />
 
       {/* ── Chat area ──────────────────────────── fills middle, scrollable */}
-      <scrollbox flex={1} stickyScroll stickyStart="bottom">
+      <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
         {initError ? (
           <box paddingX={2} flexDirection="column" gap={1}>
             <text fg={colors.error}>Connection error: {initError}</text>
