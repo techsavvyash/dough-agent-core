@@ -66,6 +66,7 @@ export function createSessionCommandsExtension(): RuntimeExtension {
         description: "Start a fresh thread (old threads preserved)",
         category: "thread",
         execute() {
+          api.notify("__clear__", "info");
           api.notify("Starting new thread...", "info");
         },
       });
