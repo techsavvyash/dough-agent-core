@@ -21,6 +21,7 @@ type ErrorHandler = (message: string, code?: string) => void;
 type ConnectionHandler = () => void;
 type DiffsHandler = (payload: DiffPayload) => void;
 type ThreadsHandler = (threads: ThreadMeta[]) => void;
+type SessionsListHandler = (sessions: SessionMeta[]) => void;
 type McpStatusHandler = (servers: McpServerStatus[]) => void;
 type SkillsHandler = (skills: SkillStatus[]) => void;
 type SkillContentHandler = (name: string, instructions: string) => void;
@@ -44,6 +45,7 @@ export class DoughClient {
   private disconnectHandlers = new Set<ConnectionHandler>();
   private diffsHandlers = new Set<DiffsHandler>();
   private threadsHandlers = new Set<ThreadsHandler>();
+  private sessionsListHandlers = new Set<SessionsListHandler>();
   private mcpStatusHandlers = new Set<McpStatusHandler>();
   private skillsHandlers = new Set<SkillsHandler>();
   private skillContentHandlers = new Set<SkillContentHandler>();
@@ -91,6 +93,9 @@ export class DoughClient {
             break;
           case "diffs":
             for (const h of this.diffsHandlers) h(msg.payload);
+            break;
+          case "sessions_list":
+            for (const h of this.sessionsListHandlers) h(msg.sessions);
             break;
           case "threads_list":
             for (const h of this.threadsHandlers) h(msg.threads);
@@ -177,6 +182,15 @@ export class DoughClient {
 
   getDiffs(): void {
     this.sendMessage({ kind: "get_diffs" });
+  }
+
+  listSessions(): void {
+    this.sendMessage({ kind: "list_sessions" });
+  }
+
+  onSessions(handler: SessionsListHandler): () => void {
+    this.sessionsListHandlers.add(handler);
+    return () => this.sessionsListHandlers.delete(handler);
   }
 
   listThreads(sessionId?: string): void {

@@ -31,6 +31,7 @@ export function useSession(client: DoughClient) {
   const [connected, setConnected] = useState(false);
   /** Number of messages waiting in the server queue (not yet running). */
   const [queuedCount, setQueuedCount] = useState(0);
+  const [totalTokens, setTotalTokens] = useState(0);
 
   useEffect(() => {
     const unsubEvent = client.onEvent((event: DoughEvent) => {
@@ -175,6 +176,9 @@ export function useSession(client: DoughClient) {
           break;
 
         case DoughEventType.Finished:
+          if (event.usage) {
+            setTotalTokens((prev) => prev + event.usage!.totalTokens);
+          }
           setIsStreaming(false);
           // One queued message (if any) is now starting — decrement the counter.
           setQueuedCount((prev) => Math.max(0, prev - 1));
@@ -335,6 +339,7 @@ export function useSession(client: DoughClient) {
     messages,
     isStreaming,
     queuedCount,
+    totalTokens,
     session,
     error,
     connected,

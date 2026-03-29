@@ -1,5 +1,6 @@
 import type { Message } from "../hooks/useSession.ts";
 import { ToolCallView } from "./ToolCallView.tsx";
+import { ThinkingBlock } from "./ThinkingBlock.tsx";
 import { colors, symbols } from "../theme.ts";
 import { getDoughSyntaxStyle } from "../utils/syntaxStyle.ts";
 
@@ -26,26 +27,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
     return (
       <box flexDirection="column">
-        {/* Thought block — up to 3 lines, dimmed above the response */}
+        {/* Thought block — collapsible, press Space to expand */}
         {thought && (
-          <box paddingX={1} flexDirection="column" marginBottom={1}>
-            <box flexDirection="row">
-              <box width={2} flexShrink={0}>
-                <text fg={colors.primary}>{symbols.thought}</text>
-              </box>
-              <text fg={colors.textMuted} flex={1} wrapMode="word">
-                {(() => {
-                  const lines = thought
-                    .split("\n")
-                    .map((l) => l.trim())
-                    .filter((l) => l.length > 0)
-                    .slice(0, 3);
-                  const joined = lines.join(" ");
-                  return joined.length > 300 ? joined.slice(0, 300) + "…" : joined;
-                })()}
-              </text>
-            </box>
-          </box>
+          <ThinkingBlock thought={thought} isStreaming={isStreaming ?? false} />
         )}
 
         {/* Tool calls */}

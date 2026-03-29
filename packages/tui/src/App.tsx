@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { Attachment } from "@dough/protocol";
 import { DoughClient } from "./client.ts";
@@ -14,7 +14,15 @@ import { DiffView } from "./components/DiffView.tsx";
 import { ThreadViewer } from "./components/ThreadViewer.tsx";
 import { BashOutputView, type BashCallEntry } from "./components/BashOutputView.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
+import { StatusBar, type ApprovalMode } from "./components/StatusBar.tsx";
+import { HistorySearch } from "./components/HistorySearch.tsx";
+import { CopyMode } from "./components/CopyMode.tsx";
+import { SessionBrowser } from "./components/SessionBrowser.tsx";
+import { useGitBranch } from "./hooks/useGitBranch.ts";
+import { useSessions } from "./hooks/useSessions.ts";
 import { colors } from "./theme.ts";
+import { THEMES, saveThemeName, loadThemeName } from "./themes/index.ts";
+import type { Theme } from "./themes/index.ts";
 
 interface AppProps {
   serverUrl: string;
@@ -28,6 +36,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
     messages,
     isStreaming,
     queuedCount,
+    totalTokens,
     session,
     error,
     connected,
@@ -39,13 +48,25 @@ export function App({ serverUrl, provider, model }: AppProps) {
   const { stats, diffPayload, requestDiffs, clearDiffs, hasChanges } =
     useChangeStats(client);
   const { threads, requestAllThreads } = useThreads(client);
+  const { sessions, requestSessions } = useSessions(client);
+  const gitBranch = useGitBranch();
   const { shortcuts, commands } = useRuntimeContributions(client);
+  // Ref so callbacks always see the latest commands even if OpenTUI caches
+  // the onSubmit handler and doesn't update when the React prop changes.
+  const commandsRef = useRef(commands);
+  commandsRef.current = commands;
   const { height: _termHeight } = useTerminalDimensions();
+  const [activeTheme, setActiveTheme] = useState<Theme>(THEMES[0]!);
+  const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
   const [initError, setInitError] = useState<string | null>(null);
   const [showPalette, setShowPalette] = useState(false);
   const [showDiffView, setShowDiffView] = useState(false);
   const [showThreadViewer, setShowThreadViewer] = useState(false);
   const [showBashOutput, setShowBashOutput] = useState(false);
+  const [showHistorySearch, setShowHistorySearch] = useState(false);
+  const [showCopyMode, setShowCopyMode] = useState(false);
+  const [showSessionBrowser, setShowSessionBrowser] = useState(false);
+  const [composerFillText, setComposerFillText] = useState<string | null>(null);
   /** Flat list of every bash tool call across all messages — used by BashOutputView. */
   const bashCalls = useMemo<BashCallEntry[]>(() => {
     const acc: BashCallEntry[] = [];
@@ -64,11 +85,69 @@ export function App({ serverUrl, provider, model }: AppProps) {
     return acc;
   }, [messages]);
 
-  const noOverlay = !showPalette && !showDiffView && !showThreadViewer && !showBashOutput;
+  const noOverlay = !showPalette && !showDiffView && !showThreadViewer && !showBashOutput
+    && !showCopyMode && !showSessionBrowser;
+
+  // Load saved theme preference on mount
+  useEffect(() => {
+    loadThemeName().then((name) => {
+      if (name) {
+        const found = THEMES.find((t) => t.name === name);
+        if (found) setActiveTheme(found);
+      }
+    });
+  }, []);
 
   // Dynamic keyboard shortcuts from runtime contributions
   useKeyboard((key) => {
-    if (!noOverlay) return;
+    if (!noOverlay) {
+      // Ctrl+R: history search (dismiss other overlays don't block this)
+      if (key.ctrl && key.name === "r" && !showHistorySearch) {
+        setShowHistorySearch(true);
+      }
+      return;
+    }
+
+    // Ctrl+H: cycle through themes
+    if (key.ctrl && key.name === "h") {
+      setActiveTheme((prev) => {
+        const idx = THEMES.findIndex((t) => t.name === prev.name);
+        const next = THEMES[(idx + 1) % THEMES.length]!;
+        saveThemeName(next.name);
+        return next;
+      });
+      return;
+    }
+
+    // Ctrl+M: cycle approval mode
+    if (key.ctrl && key.name === "m") {
+      const modes: ApprovalMode[] = ["auto", "plan", "confirm"];
+      setApprovalMode((prev) => {
+        const idx = modes.indexOf(prev);
+        return modes[(idx + 1) % modes.length]!;
+      });
+      return;
+    }
+
+    // Ctrl+R: open history search
+    if (key.ctrl && key.name === "r") {
+      setShowHistorySearch(true);
+      return;
+    }
+
+    // Ctrl+Y: open copy mode
+    if (key.ctrl && key.name === "y") {
+      setShowCopyMode(true);
+      return;
+    }
+
+    // Ctrl+Shift+S (or just use Ctrl+shift — terminal sends ctrl+s as XON, so avoid)
+    // Instead, open session browser via Ctrl+\ (backslash)
+    if (key.ctrl && key.name === "\\") {
+      requestSessions();
+      setShowSessionBrowser(true);
+      return;
+    }
 
     // Build the key string to match against runtime shortcuts
     const parts: string[] = [];
@@ -206,8 +285,9 @@ export function App({ serverUrl, provider, model }: AppProps) {
       // Handle inline slash commands
       if (text.startsWith("/") && !attachments?.length) {
         const rawCmd = text.slice(1).trim().toLowerCase();
+        const cmds = commandsRef.current;
         // Find matching runtime command by name or id suffix
-        const matched = commands.find(
+        const matched = cmds.find(
           (c) =>
             c.name.replace(/^\//, "").toLowerCase() === rawCmd ||
             c.id.split(".").pop() === rawCmd
@@ -222,7 +302,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
 
       send(text, attachments);
     },
-    [send, commands, addSystemMessage, executeCommand]
+    [send, addSystemMessage, executeCommand]
   );
 
   const handlePaletteSelect = useCallback(
@@ -242,6 +322,33 @@ export function App({ serverUrl, provider, model }: AppProps) {
     },
     [client, clearMessages, addSystemMessage]
   );
+
+  // Full-screen copy mode overlay
+  if (showCopyMode) {
+    return (
+      <CopyMode
+        messages={messages}
+        onClose={() => setShowCopyMode(false)}
+      />
+    );
+  }
+
+  // Full-screen session browser overlay
+  if (showSessionBrowser) {
+    return (
+      <SessionBrowser
+        sessions={sessions}
+        activeSessionId={session?.id ?? ""}
+        onClose={() => setShowSessionBrowser(false)}
+        onSwitch={(s) => {
+          setShowSessionBrowser(false);
+          clearMessages();
+          client.resume(s.id);
+          addSystemMessage(`Resuming session ${s.id.slice(0, 8)}…`);
+        }}
+      />
+    );
+  }
 
   // Full-screen bash output overlay
   if (showBashOutput) {
@@ -297,6 +404,17 @@ export function App({ serverUrl, provider, model }: AppProps) {
         )}
       </scrollbox>
 
+      {/* ── Status bar ────────────────────────── live metrics */}
+      <StatusBar
+        model={session?.model ?? ""}
+        provider={session?.provider ?? provider}
+        totalTokens={totalTokens}
+        threadCount={threads.length}
+        gitBranch={gitBranch}
+        approvalMode={approvalMode}
+        themeName={activeTheme.name}
+      />
+
       {/* ── Error banner ───────────────────────── conditional */}
       {error && (
         <box paddingX={2} height={1}>
@@ -313,6 +431,18 @@ export function App({ serverUrl, provider, model }: AppProps) {
         />
       )}
 
+      {/* ── History search ─────────────────────── inline above composer */}
+      {showHistorySearch && (
+        <HistorySearch
+          messages={messages}
+          onSelect={(text) => {
+            setComposerFillText(text);
+            setShowHistorySearch(false);
+          }}
+          onClose={() => setShowHistorySearch(false)}
+        />
+      )}
+
       {/* ── Composer ───────────────────────────── fixed bottom, first-class */}
       <Composer
         onSubmit={handleSubmit}
@@ -320,9 +450,11 @@ export function App({ serverUrl, provider, model }: AppProps) {
         queuedCount={queuedCount}
         onAbort={abort}
         onOpenPalette={() => setShowPalette(true)}
-        paletteOpen={showPalette}
+        paletteOpen={showPalette || showHistorySearch}
         stats={stats}
         hasChanges={hasChanges}
+        fillText={composerFillText}
+        onFillConsumed={() => setComposerFillText(null)}
       />
     </box>
   );

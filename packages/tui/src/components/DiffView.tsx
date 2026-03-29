@@ -37,12 +37,15 @@ interface DiffViewProps {
  */
 export function DiffView({ payload, onClose }: DiffViewProps) {
   const { width, height } = useTerminalDimensions();
+  const isNarrow = width < 80;
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("sidebar");
   const [sidebarScrollTop, setSidebarScrollTop] = useState(0);
   const { diffs, stats } = payload;
+  // On narrow screens, always hide sidebar and focus diff
+  const effectiveSidebarVisible = sidebarVisible && !isNarrow;
 
   // Ref to the native <diff> renderable — used for imperative scrolling.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -165,7 +168,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
         <text fg={colors.accent}>{`${stats.filesChanged} ${stats.filesChanged === 1 ? "file" : "files"}  `}</text>
         <text fg={colors.success}>{`+${stats.totalAdded}  `}</text>
         <text fg={colors.error}>{`-${stats.totalRemoved}  `}</text>
-        <text fg={colors.textMuted}>{`   ←→/h/l focus panel · ↑↓/j/k ${focusedPanel === "sidebar" ? "navigate files" : "scroll diff"} · s ${isSplit ? "→ unified" : "→ split"} · b ${sidebarVisible ? "hide" : "show"} files · Esc close`}</text>
+        <text fg={colors.textMuted}>{`   ←→/h/l focus panel · ↑↓/j/k ${focusedPanel === "sidebar" ? "navigate files" : "scroll diff"} · s ${isSplit ? "→ unified" : "→ split"} · b ${effectiveSidebarVisible ? "hide" : "show"} files · Esc close`}</text>
       </box>
       <box height={1}><text fg={colors.border}>{rule}</text></box>
 
@@ -173,7 +176,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
       <box flex={1} flexDirection="row">
 
         {/* File list panel — collapsible with `b` */}
-        {sidebarVisible && (
+        {effectiveSidebarVisible && (
           <box width={FILE_LIST_W} flexDirection="column" border={["right"]} borderFg={focusedPanel === "sidebar" ? colors.accent : colors.border}>
             <scrollbox flex={1} scrollTop={sidebarScrollTop}>
               {diffs.map((diff, i) => {

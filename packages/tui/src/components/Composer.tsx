@@ -14,6 +14,9 @@ interface ComposerProps {
   paletteOpen?: boolean;
   stats: ChangeStats;
   hasChanges: boolean;
+  /** When set, fills the textarea buffer with this text then calls onFillConsumed. */
+  fillText?: string | null;
+  onFillConsumed?: () => void;
 }
 
 function formatElapsed(seconds: number): string {
@@ -42,6 +45,8 @@ export function Composer({
   paletteOpen = false,
   stats,
   hasChanges,
+  fillText,
+  onFillConsumed,
 }: ComposerProps) {
   const inputRef = useRef<TextareaRenderable>(null);
   const mountedRef = useRef(true);
@@ -55,6 +60,13 @@ export function Composer({
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [pasteStatus, setPasteStatus] = useState<string | null>(null);
   const [inputLines, setInputLines] = useState(1);
+
+  // Fill textarea from external source (e.g. history search)
+  useEffect(() => {
+    if (!fillText) return;
+    try { inputRef.current?.editBuffer.setText(fillText); } catch { /* destroyed */ }
+    onFillConsumed?.();
+  }, [fillText, onFillConsumed]);
 
   useEffect(() => {
     if (!isStreaming) {
@@ -101,6 +113,29 @@ export function Composer({
           setTimeout(() => setPasteStatus(null), 2000);
         }
       });
+    }
+    // Ctrl+E: open $EDITOR with current composer content
+    if (key.ctrl && key.name === "e") {
+      let currentText = "";
+      try { currentText = inputRef.current?.editBuffer.getText() ?? ""; } catch { return; }
+      const tmpFile = `/tmp/dough-compose-${Date.now()}.md`;
+      const editor = process.env.EDITOR ?? process.env.VISUAL ?? "vi";
+      Bun.write(tmpFile, currentText).then(() => {
+        const proc = Bun.spawn([editor, tmpFile], {
+          stdin: "inherit",
+          stdout: "inherit",
+          stderr: "inherit",
+        });
+        proc.exited.then(async () => {
+          try {
+            const edited = await Bun.file(tmpFile).text();
+            try { inputRef.current?.editBuffer.setText(edited.trimEnd()); } catch { /* destroyed */ }
+            // Clean up temp file
+            try { await Bun.$`rm -f ${tmpFile}`.quiet(); } catch { /* ignore */ }
+          } catch { /* ignore */ }
+        });
+      });
+      return;
     }
   });
 
@@ -159,6 +194,7 @@ export function Composer({
   } else {
     footerParts.push("? commands");
     footerParts.push("Ctrl+V image");
+    footerParts.push("Ctrl+E editor");
     footerParts.push("Shift+Enter newline");
   }
   if (queuedCount > 0) {

@@ -36,6 +36,7 @@ const SIDEBAR_W_FRAC = 0.28;
  */
 export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
   const { width, height } = useTerminalDimensions();
+  const isNarrow = width < 80;
   // Default to the last (most recent) call
   const [selectedIndex, setSelectedIndex] = useState(
     calls.length > 0 ? calls.length - 1 : 0
@@ -47,6 +48,8 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
     Math.max(0, calls.length - 1)
   );
   const [outputScrollTop, setOutputScrollTop] = useState(0);
+  // On narrow screens, always hide sidebar and focus output
+  const effectiveSidebarVisible = sidebarVisible && !isNarrow;
 
   // Header rule+stat+rule = 3, footer rule = 1, sidebar index indicator = 1
   const SIDEBAR_CHROME = 5;
@@ -145,7 +148,7 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
           {"←→/h/l focus panel · ↑↓/j/k "}
           {focusedPanel === "sidebar" ? "navigate" : "scroll output"}
           {" · b "}
-          {sidebarVisible ? "hide" : "show"}
+          {effectiveSidebarVisible ? "hide" : "show"}
           {" sidebar · Esc close"}
         </text>
       </box>
@@ -155,7 +158,7 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
       <box flex={1} flexDirection="row">
 
         {/* Sidebar: command list */}
-        {sidebarVisible && (
+        {effectiveSidebarVisible && (
           <box
             width={sidebarW}
             flexDirection="column"
