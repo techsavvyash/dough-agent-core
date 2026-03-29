@@ -7,17 +7,22 @@ const PREVIEW_LINES = 6;
 
 interface ToolCallViewProps {
   toolCall: ToolCallEntry;
-  /** When true, renders the dash in accent colour to indicate keyboard focus. */
   selected?: boolean;
 }
 
 /**
- * Renders a single tool call in terminal-log style:
+ * Renders a single tool call inside ToolCallGroup.
  *
- *   ─ $ echo hello world
- *     hello world
+ *   ✓  $  git status                   · 0.3s
+ *      main
  *
- *   ─ ✓ Read  src/App.tsx
+ *   ✓  Read   src/App.tsx
+ *
+ *   ⠙  Write  src/output.ts
+ *
+ *   ⠙  Agent  code-reviewer    [Ctrl+G]
+ *      └ ✓ Read   src/
+ *      └ ⠙ Bash   tsc --noEmit
  */
 export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) {
   const { name, args, status, result, output } = toolCall;
@@ -34,71 +39,117 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
     return () => clearInterval(id);
   }, [status]);
 
+  const spinnerChar =
+    symbols.spinnerFrames[spinFrame] ?? symbols.spinnerFrames[0]!;
+  const icon = status === "pending" ? spinnerChar : statusIcon(status);
+
   const isBash = name === "Bash" || name === "bash" || name === "execute";
+  const isAgent = name === "Agent" || name === "agent";
   const bashCommand = isBash && args.command ? String(args.command) : null;
-  const argSummary = bashCommand ? null : formatArgs(name, args);
+  const argSummary = isBash || isAgent ? null : formatArgs(name, args);
   const label = formatToolName(name);
 
-  // Output preview
+  // Output preview (bash tools only)
   const rawOutput = typeof output === "string" ? output : undefined;
   const outputLines = rawOutput ? rawOutput.trimEnd().split("\n") : [];
   const previewText = outputLines.slice(0, PREVIEW_LINES).join("\n");
   const extraLines = Math.max(0, outputLines.length - PREVIEW_LINES);
-  const showOutputPreview = isBash && outputLines.length > 0 && status !== "pending";
+  const showOutputPreview =
+    (isBash || isAgent) && outputLines.length > 0 && status !== "pending";
+
+  // Sub-steps from agent tool (parsed from output if JSON-like or plain lines)
+  const agentSubSteps = isAgent && args.subSteps
+    ? (args.subSteps as string[])
+    : null;
 
   return (
-    <box flexDirection="column" marginLeft={2}>
+    <box flexDirection="column" paddingX={1} paddingY={0}>
 
-      {/* ─ $ command  (bash)  OR  ─ ✓ Label  arg  (other tools) */}
-      <box flexDirection="row">
-        <text fg={accent}>{symbols.hrule + " "}</text>
+      {/* ── Header row ─────────────────────────────────────── */}
+      <box flexDirection="row" height={1}>
+        {/* Status icon */}
+        <box width={3} flexShrink={0}>
+          <text fg={accent}>{icon + " "}</text>
+        </box>
+
         {isBash ? (
+          /* Bash: icon · $ · command */
           <box flexDirection="row">
-            {status === "pending" ? (
-              <text fg={colors.warning}>
-                {(symbols.spinnerFrames[spinFrame] ?? symbols.spinnerFrames[0]!) + " "}
-              </text>
-            ) : (
-              <text fg={statusColor(status)}>{statusIcon(status) + " "}</text>
-            )}
-            <text fg={colors.textMuted}>{"$ "}</text>
+            <text fg={colors.textMuted}>{"$  "}</text>
             <text fg={colors.text}>{bashCommand ?? ""}</text>
           </box>
-        ) : (
+        ) : isAgent ? (
+          /* Agent: icon · "Agent" · description hint */
           <box flexDirection="row">
-            <text fg={accent}>
-              {status === "pending"
-                ? (symbols.spinnerFrames[spinFrame] ?? symbols.spinnerFrames[0]!) + " "
-                : statusIcon(status) + " "}
+            <text fg={colors.secondary}>{"Agent  "}</text>
+            <text fg={colors.textMuted}>
+              {String(args.description ?? args.subagent_type ?? "sub-agent")}
             </text>
-            <text fg={colors.textDim}>{label}</text>
-            {argSummary ? <text fg={colors.textMuted}>{"  " + argSummary}</text> : null}
+            {status === "pending" && (
+              <text fg={colors.borderActive}>{"  [Ctrl+G view]"}</text>
+            )}
+          </box>
+        ) : (
+          /* Other tool: icon · label · arg */
+          <box flexDirection="row">
+            <text fg={colors.textDim}>{label + "  "}</text>
+            {argSummary ? (
+              <text fg={colors.textMuted}>{argSummary}</text>
+            ) : null}
           </box>
         )}
       </box>
 
-      {/* Output preview — indented to align under command text */}
+      {/* ── Output / sub-steps preview ──────────────────────── */}
       {showOutputPreview && (
-        <box paddingLeft={4} flexDirection="column">
-          <text fg={colors.textDim} wrapMode="char">{previewText}</text>
+        <box paddingLeft={3} flexDirection="column">
+          {isAgent && agentSubSteps ? (
+            /* Agent sub-steps */
+            agentSubSteps.map((step, i) => (
+              <box key={i} height={1} flexDirection="row">
+                <text fg={colors.textMuted}>{"└ "}</text>
+                <text fg={colors.textDim}>{step}</text>
+              </box>
+            ))
+          ) : (
+            /* Raw output preview */
+            <text fg={colors.textDim} wrapMode="char">{previewText}</text>
+          )}
           {extraLines > 0 && (
             <box flexDirection="row">
               <text fg={colors.textMuted}>
-                {"…" + String(extraLines) + " more line" + (extraLines === 1 ? "" : "s") + "  "}
+                {"…" +
+                  String(extraLines) +
+                  " more line" +
+                  (extraLines === 1 ? "" : "s") +
+                  "  "}
               </text>
-              <text fg={colors.borderActive}>Ctrl+O</text>
+              <text fg={colors.borderActive}>{"Ctrl+O"}</text>
             </box>
           )}
         </box>
       )}
 
-      {/* Error output */}
-      {status === "error" && result != null && !output && (
-        <box paddingLeft={4}>
-          <text fg={colors.error} wrapMode="word">{String(result).slice(0, 300)}</text>
+      {/* ── Pending agent sub-steps (from args if available) ── */}
+      {isAgent && status === "pending" && agentSubSteps && (
+        <box paddingLeft={3} flexDirection="column">
+          {agentSubSteps.map((step, i) => (
+            <box key={i} height={1} flexDirection="row">
+              <text fg={colors.textMuted}>{"└ "}</text>
+              <text fg={colors.textDim}>{step}</text>
+            </box>
+          ))}
         </box>
       )}
 
+      {/* ── Error output ────────────────────────────────────── */}
+      {status === "error" && result != null && !output && (
+        <box paddingLeft={3}>
+          <text fg={colors.error} wrapMode="word">
+            {String(result).slice(0, 300)}
+          </text>
+        </box>
+      )}
     </box>
   );
 }
@@ -121,21 +172,27 @@ function statusColor(status: ToolCallEntry["status"]): string {
 
 function formatToolName(name: string): string {
   const labels: Record<string, string> = {
-    read_file:   "Read",
-    write_file:  "Write",
-    create_file: "Create",
-    edit_file:   "Edit",
-    str_replace: "Edit",
-    insert:      "Insert",
-    replace:     "Replace",
-    patch:       "Patch",
-    bash:        "Run",
-    execute:     "Run",
-    search:      "Search",
-    grep:        "Grep",
-    glob:        "Glob",
-    list_dir:    "List",
-    delete_file: "Delete",
+    read_file:    "Read",
+    write_file:   "Write",
+    create_file:  "Create",
+    edit_file:    "Edit",
+    str_replace:  "Edit",
+    insert:       "Insert",
+    replace:      "Replace",
+    patch:        "Patch",
+    bash:         "Run",
+    execute:      "Run",
+    search:       "Search",
+    grep:         "Grep",
+    glob:         "Glob",
+    list_dir:     "List",
+    delete_file:  "Delete",
+    Read:         "Read",
+    Write:        "Write",
+    Edit:         "Edit",
+    Bash:         "Run",
+    Glob:         "Glob",
+    Grep:         "Grep",
   };
   return labels[name] ?? name;
 }
@@ -148,7 +205,7 @@ function formatArgs(_name: string, args: Record<string, unknown>): string {
   }
   if (args.pattern || args.query) {
     const pat = String(args.pattern ?? args.query);
-    return pat.length > 80 ? pat.slice(0, 77) + "…" : pat;
+    return pat.length > 60 ? pat.slice(0, 57) + "…" : pat;
   }
   return "";
 }

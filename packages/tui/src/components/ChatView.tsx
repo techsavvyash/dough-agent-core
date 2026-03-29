@@ -9,15 +9,18 @@ interface ChatViewProps {
 
 export function ChatView({ messages, isStreaming }: ChatViewProps) {
   return (
-    <box flexDirection="column" gap={1} paddingY={1}>
+    <box flexDirection="column" paddingY={1}>
       {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
+        /*
+         * Each message sits in its own wrapper with bottom margin so there's
+         * consistent breathing room regardless of message content height.
+         * gap={} on the parent would add space even before the first message;
+         * marginBottom on each child is more predictable.
+         */
+        <box key={msg.id} flexDirection="column" marginBottom={1}>
+          <MessageBubble message={msg} />
+        </box>
       ))}
-      {/*
-       * LiveActivityBar stays anchored below the last message for the entire
-       * streaming turn — thinking, tool execution, and content phases all
-       * show an animated label so the user always knows work is in progress.
-       */}
       {isStreaming && <LiveActivityBar messages={messages} />}
     </box>
   );
