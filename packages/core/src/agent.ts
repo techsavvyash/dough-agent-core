@@ -10,7 +10,7 @@ import {
 import { DoughSession } from "./session.ts";
 import type { LLMProvider, ToolMiddleware } from "./providers/provider.ts";
 import { ClaudeProvider, type ClaudeProviderConfig } from "./providers/claude.ts";
-import { CodexProvider } from "./providers/codex.ts";
+import { CodexProvider, type CodexProviderConfig } from "./providers/codex.ts";
 import { buildAgentsContext } from "./agents-md.ts";
 import { LLMSummaryGenerator } from "./summarizer.ts";
 import { McpManager } from "./mcp/manager.ts";
@@ -40,6 +40,8 @@ export interface DoughAgentConfig {
   summaryGenerator?: SummaryGenerator;
   /** Claude-specific config passed through to ClaudeProvider */
   claude?: Omit<ClaudeProviderConfig, "model" | "systemPrompt">;
+  /** Codex-specific config passed through to CodexProvider */
+  codex?: Omit<CodexProviderConfig, "model">;
   /** MCP servers to configure at startup */
   mcpServers?: McpServerMap;
   /** Set false to skip discovering skills. Defaults to true. */
@@ -115,7 +117,11 @@ export class DoughAgent {
           });
           break;
         case "codex":
-          this.provider = new CodexProvider({ model: config.model });
+          this.provider = new CodexProvider({
+            model: config.model,
+            cwd: config.cwd,
+            ...config.codex,
+          });
           break;
         default:
           throw new Error(`Unknown provider: ${config.provider}`);
