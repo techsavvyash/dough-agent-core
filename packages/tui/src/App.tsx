@@ -72,7 +72,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
     const acc: BashCallEntry[] = [];
     for (const msg of messages) {
       for (const tc of msg.toolCalls ?? []) {
-        if (tc.name === "Bash" || tc.name === "bash" || tc.name === "execute") {
+        if (tc.name === "Bash" || tc.name === "bash" || tc.name === "execute" || tc.name === "command_execution") {
           acc.push({
             callId: tc.callId,
             command: String(tc.args.command ?? ""),

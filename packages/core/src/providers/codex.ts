@@ -241,12 +241,18 @@ export class CodexProvider implements LLMProvider {
  * We map them to ToolCallRequest/ToolCallResponse pairs so the Dough session
  * loop can track them consistently with the Claude provider.
  *
+ * Tool names are passed through from the Codex SDK's native item types
+ * (e.g. "command_execution", "file_change", "web_search") rather than
+ * being mapped to provider-specific names. For MCP tool calls, the
+ * actual tool name (item.tool) is used. The TUI's formatToolName()
+ * handles display labels for all known item types.
+ *
  * Mapping:
- *   item.started  (command_execution) → ToolCallRequest  (name: "Bash")
+ *   item.started  (command_execution) → ToolCallRequest  (name: "command_execution")
  *   item.completed (command_execution) → ToolCallResponse (with output)
- *   item.started  (file_change)       → ToolCallRequest  (name: "Write")
+ *   item.started  (file_change)       → ToolCallRequest  (name: "file_change")
  *   item.completed (file_change)      → ToolCallResponse
- *   item.started  (mcp_tool_call)     → ToolCallRequest  (name: mcp tool)
+ *   item.started  (mcp_tool_call)     → ToolCallRequest  (name: item.tool)
  *   item.completed (mcp_tool_call)    → ToolCallResponse
  *   item.started/completed (agent_message) → ContentDelta
  *   item.started/completed (reasoning)     → Thought
@@ -359,18 +365,17 @@ function mapItemStarted(item: ThreadItem, streamId: string): DoughEvent[] {
       events.push({
         type: DoughEventType.ToolCallRequest,
         callId: item.id,
-        name: "Bash",
+        name: item.type,
         args: { command: item.command },
         streamId,
       });
       break;
 
     case "file_change":
-      // Emit one ToolCallRequest per file change for visibility
       events.push({
         type: DoughEventType.ToolCallRequest,
         callId: item.id,
-        name: "Write",
+        name: item.type,
         args: {
           files: item.changes.map((c) => ({
             path: c.path,
@@ -385,8 +390,11 @@ function mapItemStarted(item: ThreadItem, streamId: string): DoughEvent[] {
       events.push({
         type: DoughEventType.ToolCallRequest,
         callId: item.id,
-        name: `mcp_${item.server}_${item.tool}`,
-        args: (item.arguments ?? {}) as Record<string, unknown>,
+        name: item.tool,
+        args: {
+          server: item.server,
+          ...(item.arguments as Record<string, unknown> ?? {}),
+        },
         streamId,
       });
       break;
@@ -395,7 +403,7 @@ function mapItemStarted(item: ThreadItem, streamId: string): DoughEvent[] {
       events.push({
         type: DoughEventType.ToolCallRequest,
         callId: item.id,
-        name: "WebSearch",
+        name: item.type,
         args: { query: item.query },
         streamId,
       });

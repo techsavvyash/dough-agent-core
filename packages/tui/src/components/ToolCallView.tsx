@@ -40,7 +40,7 @@ export function ToolCallView({ toolCall, selected = false }: ToolCallViewProps) 
     symbols.spinnerFrames[spinFrame] ?? symbols.spinnerFrames[0]!;
   const icon = status === "pending" ? spinnerChar : statusIcon(status);
 
-  const isBash = name === "Bash" || name === "bash" || name === "execute";
+  const isBash = name === "Bash" || name === "bash" || name === "execute" || name === "command_execution";
   const isAgent = name === "Agent" || name === "agent";
   const bashCommand = isBash && args.command ? String(args.command) : null;
   const argSummary = isBash || isAgent ? null : formatArgs(name, args);
@@ -182,6 +182,11 @@ function formatToolName(name: string): string {
     Bash:         "Run",
     Glob:         "Glob",
     Grep:         "Grep",
+    // Codex SDK native item types
+    command_execution: "Run",
+    file_change:      "File Change",
+    web_search:       "Search",
+    mcp_tool_call:    "MCP",
   };
   return labels[name] ?? name;
 }
