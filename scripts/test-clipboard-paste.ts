@@ -154,7 +154,7 @@ function simulateBuildPrompt(
       message: {
         role: "user",
         content: [
-          ...attachments.map((a) => ({ type: "image", source: { type: "base64", media_type: a.mimeType, data: a.data } })),
+          ...(attachments ?? []).map((a) => ({ type: "image", source: { type: "base64", media_type: a.mimeType, data: a.data } })),
           { type: "text", text },
         ],
       },

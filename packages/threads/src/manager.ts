@@ -48,6 +48,7 @@ export class ThreadManager {
       status: "active",
       tokenCount: 0,
       maxTokens: this.config.maxTokens,
+      tokensUsed: 0,
       messages: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -120,6 +121,7 @@ export class ThreadManager {
       status: "active",
       tokenCount: 0,
       maxTokens: this.config.maxTokens,
+      tokensUsed: 0,
       messages: [
         {
           id: crypto.randomUUID(),
@@ -175,6 +177,7 @@ export class ThreadManager {
       status: "active",
       tokenCount: 0,
       maxTokens: this.config.maxTokens,
+      tokensUsed: 0,
       messages: messages.map((m) => ({ ...m })),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -248,11 +251,24 @@ export class ThreadManager {
       status: thread.status,
       tokenCount: thread.tokenCount,
       maxTokens: thread.maxTokens,
+      tokensUsed: thread.tokensUsed,
       messageCount: thread.messages.length,
       summary: thread.summary,
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,
     };
+  }
+
+  /**
+   * Increment the cumulative LLM usage counter for a thread.
+   * Called by the server after each turn completes with actual usage data.
+   */
+  async addTokensUsed(threadId: string, tokens: number): Promise<void> {
+    const thread = await this.config.store.load(threadId);
+    if (!thread) return;
+    thread.tokensUsed += tokens;
+    thread.updatedAt = new Date().toISOString();
+    await this.config.store.save(thread);
   }
 
   /**

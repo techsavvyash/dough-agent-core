@@ -9,6 +9,8 @@ export interface Thread {
   status: ThreadStatus;
   tokenCount: number;
   maxTokens: number;
+  /** Cumulative actual LLM usage (input + output tokens consumed). Persisted. */
+  tokensUsed: number;
   summary?: string;
   messages: ThreadMessage[];
   createdAt: string;

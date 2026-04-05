@@ -1,7 +1,8 @@
-import { useCallback, useRef, useState, useEffect } from "react";
+import { useCallback, useRef, useState, useEffect, useMemo } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { TextareaRenderable } from "@opentui/core";
 import type { Attachment, ChangeStats } from "@dough/protocol";
+import type { Message } from "../hooks/useSession.ts";
 import { colors, symbols, hrule } from "../theme.ts";
 import { pasteImageFromClipboard } from "../hooks/useClipboard.ts";
 
@@ -17,6 +18,8 @@ interface ComposerProps {
   /** When set, fills the textarea buffer with this text then calls onFillConsumed. */
   fillText?: string | null;
   onFillConsumed?: () => void;
+  /** Messages array — used to derive the current streaming phase for the status indicator. */
+  messages?: Message[];
 }
 
 function formatElapsed(seconds: number): string {
@@ -47,6 +50,7 @@ export function Composer({
   hasChanges,
   fillText,
   onFillConsumed,
+  messages = [],
 }: ComposerProps) {
   const inputRef = useRef<TextareaRenderable>(null);
   const mountedRef = useRef(true);
@@ -169,16 +173,42 @@ export function Composer({
     updateInputLines();
   }, [updateInputLines]);
 
-  // ── Build top border with thinking indicator ───────────
+  // ── Derive streaming phase from messages ────────────────
+  const streamingPhase = useMemo(() => {
+    if (!isStreaming) return null;
+    const streamingMsg = [...messages].reverse().find((m) => m.isStreaming);
+    if (!streamingMsg) return { label: "Working...", color: colors.textDim };
+
+    const pendingTool = streamingMsg.toolCalls?.find((tc) => tc.status === "pending");
+    if (pendingTool) {
+      const isBash = pendingTool.name === "Bash" || pendingTool.name === "bash"
+        || pendingTool.name === "execute" || pendingTool.name === "command_execution";
+      const cmd = isBash && pendingTool.args.command
+        ? String(pendingTool.args.command).split("\n")[0]?.slice(0, 50) ?? ""
+        : "";
+      const label = cmd ? `Running ${cmd}` : `Running ${pendingTool.name}`;
+      return { label, color: colors.warning };
+    }
+    if (streamingMsg.content && streamingMsg.content.length > 0) {
+      return { label: "Writing response...", color: colors.accent };
+    }
+    if (streamingMsg.thought) {
+      return { label: "Thinking...", color: colors.primary };
+    }
+    return { label: "Working...", color: colors.textDim };
+  }, [isStreaming, messages]);
+
+  // ── Build top border with phase-aware indicator ────────
   const timer =
     isStreaming && elapsed > 0 ? ` [${formatElapsed(elapsed)}]` : "";
-  const thinkingSegment = isStreaming
-    ? ` ${symbols.thinking} Thinking...${timer} `
+  const phaseLabel = streamingPhase?.label ?? "";
+  const statusSegment = isStreaming
+    ? ` ${symbols.thinking} ${phaseLabel}${timer} `
     : "";
   const ruleBase = symbols.hrule;
   const topBorder = isStreaming
-    ? `${ruleBase}${thinkingSegment}${symbols.hrule.repeat(
-        Math.max(0, width - 1 - thinkingSegment.length)
+    ? `${ruleBase}${statusSegment}${symbols.hrule.repeat(
+        Math.max(0, width - 1 - statusSegment.length)
       )}`
     : hrule(width);
 
@@ -237,7 +267,7 @@ export function Composer({
     <box flexDirection="column" height={composerHeight}>
       {/* Top separator — embeds thinking indicator on the left when streaming */}
       <box height={1}>
-        <text fg={isStreaming ? colors.warning : colors.border}>{topBorder}</text>
+        <text fg={isStreaming ? (streamingPhase?.color ?? colors.warning) : colors.border}>{topBorder}</text>
       </box>
 
       {/* Input area — prefix is permanent, textarea shows MIN_VISIBLE_LINES rows minimum */}

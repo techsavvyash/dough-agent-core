@@ -21,17 +21,14 @@ interface LiveActivityBarProps {
  */
 export function LiveActivityBar({ messages }: LiveActivityBarProps) {
   const [frame, setFrame] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     const spinInterval = setInterval(
       () => setFrame((f) => (f + 1) % symbols.spinnerFrames.length),
       80,
     );
-    const tickInterval = setInterval(() => setElapsed((s) => s + 1), 1000);
     return () => {
       clearInterval(spinInterval);
-      clearInterval(tickInterval);
     };
   }, []);
 
@@ -65,10 +62,10 @@ export function LiveActivityBar({ messages }: LiveActivityBarProps) {
     phaseLabel = "Writing response...";
     phaseColor = colors.accent;
   } else if (streamingMsg?.thought) {
-    phase = "thinking";
-    const elapsedStr = elapsed > 0 ? `  ${String(elapsed)}s` : "";
-    phaseLabel = `Thinking...${elapsedStr}`;
-    phaseColor = colors.primary;
+    // Don't show "Thinking..." here — the Composer border already
+    // displays the thinking indicator with timer. Return null to avoid
+    // a redundant duplicate.
+    return null;
   }
 
   // Suppress "unused variable" warning while keeping the phase derivation

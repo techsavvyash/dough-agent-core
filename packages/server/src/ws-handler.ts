@@ -309,8 +309,15 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
       ws.send(JSON.stringify(statsMsg));
     });
 
+    let turnTokensUsed = 0;
+
     try {
       for await (const event of session.send(prompt, attachments)) {
+        // Capture total tokens from Finished events for persistence
+        if (event.type === DoughEventType.Finished && event.usage) {
+          turnTokensUsed += event.usage.totalTokens;
+        }
+
         // Platform events (attribution, diff tracking) are handled by
         // extensions via the runtime event bus in DoughSession.send().
         // We just relay DoughEvents to the client.
@@ -333,6 +340,12 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
         // No-op when a handoff summary already exists.
         await agent.getThreadManager()
           .setThreadTitle(session.currentThreadId, deriveTitle(prompt));
+
+        // Persist cumulative LLM token usage to the thread
+        if (turnTokensUsed > 0) {
+          await agent.getThreadManager()
+            .addTokensUsed(session.currentThreadId, turnTokensUsed);
+        }
       }
 
       if (store && session.currentThreadId) {
@@ -773,6 +786,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
               status: t.status,
               tokenCount: t.tokenCount,
               maxTokens: t.maxTokens,
+              tokensUsed: t.tokensUsed,
               messageCount: t.messageCount,
               summary: t.summary,
               createdAt: t.createdAt,

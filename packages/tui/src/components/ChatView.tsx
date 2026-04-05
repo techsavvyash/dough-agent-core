@@ -1,6 +1,5 @@
 import type { Message } from "../hooks/useSession.ts";
 import { MessageBubble } from "./MessageBubble.tsx";
-import { LiveActivityBar } from "./LiveActivityBar.tsx";
 
 interface ChatViewProps {
   messages: Message[];
@@ -8,6 +7,10 @@ interface ChatViewProps {
 }
 
 export function ChatView({ messages, isStreaming }: ChatViewProps) {
+  // Suppress unused-var lint — isStreaming is part of the public prop interface
+  // and may be used by future enhancements.
+  void isStreaming;
+
   return (
     <box flexDirection="column" paddingTop={1} paddingBottom={2}>
       {messages.map((msg) => (
@@ -21,7 +24,6 @@ export function ChatView({ messages, isStreaming }: ChatViewProps) {
           <MessageBubble message={msg} />
         </box>
       ))}
-      {isStreaming && <LiveActivityBar messages={messages} />}
     </box>
   );
 }

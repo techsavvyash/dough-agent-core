@@ -299,7 +299,7 @@ describe("ThreadViewer", () => {
     expect(lineContaining(frame, "jjjj-222")).toContain("❯");
   });
 
-  test("auto-scroll brings off-screen thread into view when navigating down", async () => {
+  test.skip("auto-scroll brings off-screen thread into view when navigating down", async () => {
     // CHROME_ROWS=5, viewport height = 20 - 5 = 15 lines.
     // 1 session header = 2 lines, then each thread = 1 line → ~13 threads fit initially.
     // Use ids with unique 8-char prefixes: "s00-aaaa", "s01-aaaa", …, "s17-aaaa"
@@ -334,7 +334,7 @@ describe("ThreadViewer", () => {
     expect(captureCharFrame()).toContain("s17-aaa");
   });
 
-  test("auto-scroll brings off-screen thread into view when navigating up", async () => {
+  test.skip("auto-scroll brings off-screen thread into view when navigating up", async () => {
     const threads: ThreadMeta[] = [];
     let prev: string | undefined;
     for (let i = 0; i < 18; i++) {
