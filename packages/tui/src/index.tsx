@@ -45,25 +45,34 @@ function readSttyDimensions(): { rows: number; columns: number } {
 /**
  * Patch process.stdout with correct terminal dimensions so OpenTUI's
  * createCliRenderer uses the real terminal size rather than the 80×24 default.
+ *
+ * Uses mutable variables + getter/setter so that resize events (SIGWINCH)
+ * can update the values without hitting "readonly property" errors.
  */
 function patchStdoutDimensions(): void {
-  const { rows, columns } = readSttyDimensions();
-  // Always override with stty values — process.stdout may carry a stale or
-  // off-by-one value from the parent shell (e.g., tmux reports rows - 1 when
-  // its status bar is visible, or Bun pipes may report any cached value).
-  // Using stty ensures we read directly from the controlling TTY.
+  let { rows, columns } = readSttyDimensions();
+
   try {
     Object.defineProperty(process.stdout, "columns", {
       get: () => columns,
+      set: (v: number) => { columns = v; },
       configurable: true,
     });
   } catch { /* already non-configurable — fall through */ }
   try {
     Object.defineProperty(process.stdout, "rows", {
       get: () => rows,
+      set: (v: number) => { rows = v; },
       configurable: true,
     });
   } catch { /* already non-configurable — fall through */ }
+
+  // Re-read dimensions on terminal resize so the patched values stay current
+  process.stdout.on("resize", () => {
+    const dims = readSttyDimensions();
+    columns = dims.columns;
+    rows = dims.rows;
+  });
 }
 
 const args = process.argv.slice(2);
