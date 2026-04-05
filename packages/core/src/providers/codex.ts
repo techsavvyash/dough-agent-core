@@ -25,10 +25,10 @@ import type {
   McpServerStatus,
 } from "@dough/protocol";
 import type { ThreadMessage } from "@dough/threads";
-import type { LLMProvider, SendOptions, ToolMiddleware } from "./provider.ts";
+import type { LLMProvider, SendOptions } from "./provider.ts";
 import { getBuiltinToolSchemas, toOpenAIFunctions } from "../tools/definitions.ts";
 import { executeTool } from "../tools/executor.ts";
-import { getValidToken, type ValidToken } from "../auth/openai-oauth.ts";
+import { getValidToken } from "../auth/openai-oauth.ts";
 
 // ── Config ────────────────────────────────────────────────────────
 
@@ -464,7 +464,7 @@ export class CodexProvider implements LLMProvider {
     // Track partial function calls being built up across events
     const partialCalls = new Map<
       string,
-      { call_id: string; name: string; arguments: string }
+      { id: string; call_id: string; name: string; arguments: string }
     >();
 
     try {
@@ -652,7 +652,8 @@ function convertMessages(
               callId: string;
               name: string;
               args: Record<string, unknown>;
-              result?: unknown;
+              output?: string;
+              status?: string;
             }>
           | undefined;
 
@@ -666,20 +667,37 @@ function convertMessages(
             });
           }
 
-          // Add function calls and their outputs
-          for (const tc of toolCalls) {
+          // Add function calls and their outputs.
+          // OpenAI requires `id` to start with "fc_" and `call_id` to start
+          // with "call_". When replaying history from other providers (e.g.
+          // Claude's toolu_xxx IDs), remap to synthetic OpenAI-compatible IDs.
+          for (let i = 0; i < toolCalls.length; i++) {
+            const tc = toolCalls[i]!;
+            const fcId = tc.callId.startsWith("fc_")
+              ? tc.callId
+              : `fc_replay_${i}_${tc.callId.slice(0, 12)}`;
+            const callId = tc.callId.startsWith("call_")
+              ? tc.callId
+              : `call_replay_${i}_${tc.callId.slice(0, 12)}`;
             input.push({
               type: "function_call",
-              id: tc.callId,
-              call_id: tc.callId,
+              id: fcId,
+              call_id: callId,
               name: tc.name,
               arguments: JSON.stringify(tc.args),
             });
-            if (tc.result !== undefined) {
+            if (tc.output !== undefined) {
               input.push({
                 type: "function_call_output",
-                call_id: tc.callId,
-                output: String(tc.result),
+                call_id: callId,
+                output: tc.output,
+              });
+            } else {
+              // OpenAI requires every function_call to have a matching output
+              input.push({
+                type: "function_call_output",
+                call_id: callId,
+                output: tc.status === "error" ? "Error" : "OK",
               });
             }
           }
