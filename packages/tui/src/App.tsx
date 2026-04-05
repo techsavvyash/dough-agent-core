@@ -256,7 +256,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
   );
 
   const executeCommand = useCallback(
-    (commandId: string) => {
+    (commandId: string, args?: Record<string, unknown>) => {
       setShowPalette(false);
 
       // Exit is inherently local — must terminate the TUI process
@@ -269,7 +269,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
       // command handler, performs any side-effects (fork, new session, compact),
       // and sends back UI intents (runtime:notify, runtime:open_panel) that
       // the onNotify/onOpenPanel listeners handle.
-      client.executeRuntimeCommand(commandId);
+      client.executeRuntimeCommand(commandId, args);
     },
     [client]
   );
@@ -286,14 +286,35 @@ export function App({ serverUrl, provider, model }: AppProps) {
       if (text.startsWith("/") && !attachments?.length) {
         const rawCmd = text.slice(1).trim().toLowerCase();
         const cmds = commandsRef.current;
-        // Find matching runtime command by name or id suffix
-        const matched = cmds.find(
+
+        // Try exact match first
+        let matched = cmds.find(
           (c) =>
             c.name.replace(/^\//, "").toLowerCase() === rawCmd ||
             c.id.split(".").pop() === rawCmd
         );
+
+        // Try prefix match for commands with arguments (e.g. "/provider claude")
+        let cmdArgs: Record<string, unknown> | undefined;
+        if (!matched) {
+          const parts = rawCmd.split(/\s+/);
+          const cmdName = parts[0]!;
+          const argStr = parts.slice(1).join(" ");
+          matched = cmds.find(
+            (c) =>
+              c.name.replace(/^\//, "").toLowerCase() === cmdName ||
+              c.id.split(".").pop() === cmdName
+          );
+          if (matched && argStr) {
+            // For /provider, pass the provider name as { provider: "claude" }
+            if (matched.id === "session.provider_switch") {
+              cmdArgs = { provider: argStr };
+            }
+          }
+        }
+
         if (matched) {
-          executeCommand(matched.id);
+          executeCommand(matched.id, cmdArgs);
         } else {
           addSystemMessage(`Unknown command: ${rawCmd}`);
         }

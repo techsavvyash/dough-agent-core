@@ -67,6 +67,14 @@ export class DoughSession {
     this.activeThreadId = threadId;
   }
 
+  /**
+   * Hot-swap the LLM provider. Thread history is preserved — only
+   * the provider used for subsequent turns changes.
+   */
+  setProvider(provider: LLMProvider): void {
+    this.provider = provider;
+  }
+
   async *send(prompt: string, attachments?: Attachment[]): AsyncGenerator<DoughEvent> {
     if (!this.activeThreadId) {
       await this.initialize();

@@ -94,6 +94,18 @@ export function createSessionCommandsExtension(): RuntimeExtension {
       });
 
       api.registerCommand({
+        id: "session.provider_switch",
+        name: "/provider",
+        description: "Switch LLM provider (claude or codex)",
+        category: "session",
+        execute() {
+          // Actual provider swap is handled in ws-handler's
+          // handleCommandSideEffects — this just signals intent.
+          api.notify("Switching provider...", "info");
+        },
+      });
+
+      api.registerCommand({
         id: "session.exit",
         name: "/exit",
         description: "Exit Dough",

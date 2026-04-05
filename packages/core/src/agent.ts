@@ -293,6 +293,37 @@ export class DoughAgent {
     return this.provider;
   }
 
+  /**
+   * Hot-swap the active LLM provider at runtime.
+   * Updates the runtime client registration so extensions see the new provider.
+   */
+  setProvider(newProvider: LLMProvider): void {
+    this.provider = newProvider;
+    this.runtime.registerClient(wrapLLMProviderAsClient(newProvider));
+  }
+
+  /**
+   * Create a provider instance by name, using the current agent config.
+   */
+  createProvider(name: "claude" | "codex"): LLMProvider {
+    switch (name) {
+      case "claude":
+        return new ClaudeProvider({
+          model: this.config.model,
+          systemPrompt: this.config.systemPrompt,
+          ...this.config.claude,
+        });
+      case "codex":
+        return new CodexProvider({
+          model: this.config.model,
+          cwd: this.config.cwd,
+          ...this.config.codex,
+        });
+      default:
+        throw new Error(`Unknown provider: ${name}`);
+    }
+  }
+
   getMcpManager(): McpManager {
     return this.mcpManager;
   }

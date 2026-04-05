@@ -142,8 +142,64 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
   async function handleCommandSideEffects(
     ws: ServerWebSocket<WSData>,
     commandId: string,
+    args?: Record<string, unknown>,
   ): Promise<void> {
     switch (commandId) {
+      case "session.provider_switch": {
+        const target = String(args?.provider ?? "").toLowerCase();
+        if (target !== "claude" && target !== "codex") {
+          const err: ServerMessage = {
+            kind: "error",
+            message: `Invalid provider "${target}". Use "claude" or "codex".`,
+          };
+          ws.send(JSON.stringify(err));
+          return;
+        }
+
+        const currentProvider = agent.getProvider().name;
+        if (currentProvider === target) {
+          const notify: ServerMessage = {
+            kind: "runtime:notify",
+            message: `Already using ${target}.`,
+            level: "info",
+          };
+          ws.send(JSON.stringify(notify));
+          return;
+        }
+
+        // Create new provider and hot-swap it
+        const newProvider = agent.createProvider(target);
+        agent.setProvider(newProvider);
+
+        // Update the active session's provider reference
+        if (ws.data.session) {
+          ws.data.session.setProvider(newProvider);
+        }
+
+        // Send updated session_info so the TUI updates its provider display
+        const session = ws.data.session;
+        if (session) {
+          const tm = agent.getThreadManager();
+          const threads = await tm.listThreads(session.id);
+          const reply: ServerMessage = {
+            kind: "session_info",
+            session: {
+              id: session.id,
+              activeThreadId: session.currentThreadId!,
+              threads: threads.map((t) => ThreadManager.toMeta(t)),
+              provider: target,
+              model: undefined,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          };
+          ws.send(JSON.stringify(reply));
+        }
+
+        console.log(`[ws] provider switched: ${currentProvider} → ${target}`);
+        break;
+      }
+
       case "session.thread_fork": {
         const session = ws.data.session;
         if (!session?.currentThreadId) return;
@@ -868,7 +924,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           // Server-side effects for commands that need access to the
           // agent/session/store — the extension handles UI intents (notify,
           // openPanel) but these operations require server-level access.
-          await handleCommandSideEffects(ws, msg.commandId);
+          await handleCommandSideEffects(ws, msg.commandId, msg.args);
           break;
         }
 
