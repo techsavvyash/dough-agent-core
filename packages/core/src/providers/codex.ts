@@ -1,3 +1,22 @@
+/**
+ * Codex provider — OpenAI Responses API with local tool execution.
+ *
+ * Implements LLMProvider using raw fetch() to the OpenAI Responses API,
+ * with an agentic loop that:
+ *   1. Streams a response via SSE
+ *   2. Collects function_call items
+ *   3. Executes tools locally (Bash, Read, Write, Edit, Glob, Grep)
+ *   4. Sends results back as function_call_output
+ *   5. Repeats until the model stops requesting tools
+ *
+ * Auth modes:
+ *   - OAuth (subscription): POST to chatgpt.com/backend-api/codex/responses
+ *     with Bearer JWT + chatgpt-account-id header
+ *   - API key: POST to api.openai.com/v1/responses with Bearer sk-...
+ *
+ * Tool names use Claude's convention (Bash, Write, Read, Edit, Glob, Grep)
+ * so all extensions and middleware work identically across providers.
+ */
 import { DoughEventType } from "@dough/protocol";
 import type {
   DoughEvent,
@@ -7,189 +26,326 @@ import type {
 } from "@dough/protocol";
 import type { ThreadMessage } from "@dough/threads";
 import type { LLMProvider, SendOptions, ToolMiddleware } from "./provider.ts";
-import {
-  Codex,
-  type ThreadEvent,
-  type ThreadItem,
-  type ThreadOptions,
-  type CodexOptions,
-} from "@openai/codex-sdk";
+import { getBuiltinToolSchemas, toOpenAIFunctions } from "../tools/definitions.ts";
+import { executeTool } from "../tools/executor.ts";
+import { getValidToken, type ValidToken } from "../auth/openai-oauth.ts";
+
+// ── Config ────────────────────────────────────────────────────────
 
 export interface CodexProviderConfig {
+  /** Model ID, e.g. "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex". Defaults to "gpt-5.4". */
   model?: string;
+  /** Working directory for tool execution. Defaults to process.cwd(). */
   cwd?: string;
-  /** Environment variables passed to the Codex CLI process. */
-  env?: Record<string, string>;
-  /** OpenAI / Codex API key. Falls back to CODEX_API_KEY / OPENAI_API_KEY env vars. */
+  /** OpenAI API key. Falls back to OPENAI_API_KEY env var. */
   apiKey?: string;
-  /** Sandbox mode for the Codex CLI. Defaults to "danger-full-access" (matches bypassPermissions). */
-  sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
-  /** Approval policy. Defaults to "never" for autonomous operation. */
-  approvalPolicy?: "never" | "on-request" | "on-failure" | "untrusted";
-  /** Model reasoning effort. Defaults to "medium". */
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
-  /** Additional Codex CLI config overrides (TOML key=value). */
-  config?: Record<string, unknown>;
+  /** OAuth client ID for ChatGPT subscription auth. */
+  oauthClientId?: string;
+  /** Path to OAuth credentials file. Defaults to ~/.dough/auth.json. */
+  oauthCredentialsPath?: string;
+  /** Override API endpoint base URL. */
+  baseUrl?: string;
+  /** Max agentic loop iterations (tool round-trips). Defaults to 30. */
+  maxTurns?: number;
+  /** Model reasoning effort. */
+  reasoningEffort?: "low" | "medium" | "high";
 }
 
-/**
- * Codex provider using @openai/codex-sdk.
- *
- * Wraps the Codex SDK:
- * - new Codex() → codex.startThread() / codex.resumeThread(id)
- * - thread.runStreamed(input) → { events: AsyncGenerator<ThreadEvent> }
- * - JSONL persistence in ~/.codex/sessions
- *
- * The Codex SDK spawns the `codex` CLI as a subprocess. The CLI handles all
- * tool execution (bash, file writes, MCP, etc.) internally — unlike the Claude
- * provider where tools are invoked by the SDK and we see individual tool_use
- * blocks, Codex yields higher-level "item" events (command_execution,
- * file_change, mcp_tool_call) that we map to DoughEvent ToolCallRequest /
- * ToolCallResponse pairs.
- */
+// ── Auth resolution ───────────────────────────────────────────────
+
+interface ResolvedAuth {
+  baseUrl: string;
+  headers: Record<string, string>;
+}
+
+async function resolveAuth(config: CodexProviderConfig): Promise<ResolvedAuth> {
+  // 1. Try API key first (explicit config or env var)
+  const apiKey = config.apiKey ?? process.env.OPENAI_API_KEY;
+  if (apiKey) {
+    return {
+      baseUrl: config.baseUrl ?? "https://api.openai.com/v1",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+    };
+  }
+
+  // 2. Try OAuth credentials (subscription reuse) — always check default path
+  const token = await getValidToken(config.oauthCredentialsPath);
+  if (token) {
+    return {
+      baseUrl: config.baseUrl ?? "https://chatgpt.com/backend-api/codex",
+      headers: {
+        Authorization: `Bearer ${token.token}`,
+        "chatgpt-account-id": token.accountId,
+        "Content-Type": "application/json",
+      },
+    };
+  }
+
+  throw new Error(
+    "No OpenAI auth configured. Set OPENAI_API_KEY env var, " +
+      "provide apiKey in config, or run `codex` CLI to set up OAuth."
+  );
+}
+
+// ── SSE types ─────────────────────────────────────────────────────
+
+interface PendingFunctionCall {
+  id: string;      // item id (fc_xxx) — used when sending back function_call items
+  call_id: string; // call_id (call_xxx) — used to match function_call_output
+  name: string;
+  arguments: string; // JSON string
+}
+
+// ── Provider ──────────────────────────────────────────────────────
+
 export class CodexProvider implements LLMProvider {
   readonly name = "codex";
   readonly maxContextTokens = 200_000;
-  readonly supportsMcp = true;
+  readonly supportsMcp = false;
 
   private config: CodexProviderConfig;
-  private codex: Codex;
-  private activeThreadId: string | null = null;
+  private cwd: string;
+  private responseId: string | null = null;
   private mcpServers: McpServerMap = {};
 
   constructor(config: CodexProviderConfig = {}) {
     this.config = {
-      sandboxMode: "danger-full-access",
-      approvalPolicy: "never",
-      reasoningEffort: "medium",
       ...config,
+      model: config.model ?? "gpt-5.4",
+      maxTurns: config.maxTurns ?? 30,
     };
-
-    const codexOptions: CodexOptions = {};
-    if (this.config.apiKey) {
-      codexOptions.apiKey = this.config.apiKey;
-    }
-    if (this.config.env) {
-      codexOptions.env = this.config.env;
-    }
-    if (this.config.config) {
-      codexOptions.config = this.config.config as Record<string, string>;
-    }
-
-    this.codex = new Codex(codexOptions);
+    this.cwd = config.cwd ?? process.cwd();
   }
 
   get sessionId(): string | null {
-    return this.activeThreadId;
+    return this.responseId;
   }
 
   async *send(
     messages: ThreadMessage[],
     options: SendOptions
   ): AsyncGenerator<DoughEvent> {
-    const lastUserMessage = [...messages]
-      .reverse()
-      .find((m) => m.role === "user");
-    if (!lastUserMessage) {
+    const streamId = crypto.randomUUID();
+
+    // Resolve auth
+    let auth: ResolvedAuth;
+    try {
+      auth = await resolveAuth(this.config);
+    } catch (err) {
       yield {
         type: DoughEventType.Error,
-        message: "No user message found in thread",
+        message: err instanceof Error ? err.message : String(err),
       };
       return;
     }
 
-    const streamId = crypto.randomUUID();
-    let fullText = "";
-    let lastUsage: UsageMetadata = {
+    const toolDefs = toOpenAIFunctions(getBuiltinToolSchemas());
+    let input = convertMessages(messages, options);
+    let previousResponseId = this.responseId;
+    let totalUsage: UsageMetadata = {
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
     };
+    let fullText = "";
+    let turnCount = 0;
+    const maxTurns = this.config.maxTurns ?? 30;
 
-    // Build thread options
-    const threadOptions: ThreadOptions = {
-      model: options.model ?? this.config.model,
-      workingDirectory: this.config.cwd ?? process.cwd(),
-      sandboxMode: this.config.sandboxMode,
-      approvalPolicy: this.config.approvalPolicy,
-      modelReasoningEffort: this.config.reasoningEffort,
-      skipGitRepoCheck: true,
-    };
+    // Agentic loop
+    while (turnCount < maxTurns) {
+      turnCount++;
 
-    // Build input — text + optional image attachments
-    const input = buildInput(lastUserMessage.content, options);
+      if (options.signal?.aborted) {
+        yield { type: DoughEventType.Aborted };
+        return;
+      }
 
-    try {
-      // Start or resume thread
-      const thread = this.activeThreadId
-        ? this.codex.resumeThread(this.activeThreadId, threadOptions)
-        : this.codex.startThread(threadOptions);
+      // 1. Stream one API call
+      const pendingCalls: PendingFunctionCall[] = [];
+      let turnText = "";
 
-      const { events } = await thread.runStreamed(input, {
-        signal: options.signal,
-      });
+      try {
+        for await (const sseEvent of this.streamRequest(
+          auth,
+          input,
+          toolDefs,
+          previousResponseId,
+          options
+        )) {
+          if (options.signal?.aborted) {
+            yield { type: DoughEventType.Aborted };
+            return;
+          }
 
-      for await (const event of events) {
-        // Check abort
+          switch (sseEvent.kind) {
+            case "text_delta":
+              turnText += sseEvent.text;
+              fullText += sseEvent.text;
+              yield {
+                type: DoughEventType.ContentDelta,
+                text: sseEvent.text,
+                streamId,
+              };
+              break;
+
+            case "reasoning_delta":
+              yield {
+                type: DoughEventType.Thought,
+                text: sseEvent.text,
+                streamId,
+              };
+              break;
+
+            case "function_call":
+              pendingCalls.push(sseEvent.call);
+              break;
+
+            case "response_completed":
+              this.responseId = sseEvent.responseId;
+              previousResponseId = sseEvent.responseId;
+              if (sseEvent.usage) {
+                totalUsage = {
+                  inputTokens:
+                    totalUsage.inputTokens + (sseEvent.usage.input_tokens ?? 0),
+                  outputTokens:
+                    totalUsage.outputTokens + (sseEvent.usage.output_tokens ?? 0),
+                  cachedTokens: sseEvent.usage.input_tokens_details?.cached_tokens,
+                  totalTokens:
+                    totalUsage.inputTokens +
+                    totalUsage.outputTokens +
+                    (sseEvent.usage.input_tokens ?? 0) +
+                    (sseEvent.usage.output_tokens ?? 0),
+                };
+              }
+              break;
+
+            case "error":
+              yield {
+                type: DoughEventType.Error,
+                message: sseEvent.message,
+              };
+              break;
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+
+        // Stale response ID — clear and retry fresh
+        if (
+          previousResponseId &&
+          (msg.includes("not found") || msg.includes("invalid"))
+        ) {
+          this.responseId = null;
+          previousResponseId = null;
+          turnCount--; // don't count this as a turn
+          continue;
+        }
+
+        yield { type: DoughEventType.Error, message: msg };
+        break;
+      }
+
+      // No tool calls → model is done
+      if (pendingCalls.length === 0) break;
+
+      // 2. Execute tools locally
+      const toolResults: Array<{
+        call_id: string;
+        output: string;
+      }> = [];
+
+      for (const call of pendingCalls) {
+        let args: Record<string, unknown>;
+        try {
+          args = JSON.parse(call.arguments);
+        } catch {
+          args = {};
+        }
+
+        // Apply middleware
+        for (const mw of options.toolMiddleware ?? []) {
+          if (mw.toolName && mw.toolName !== call.name) continue;
+          const modified = await mw.beforeToolUse?.(call.name, args);
+          if (modified) args = modified;
+        }
+
+        // Yield ToolCallRequest
+        yield {
+          type: DoughEventType.ToolCallRequest,
+          callId: call.call_id,
+          name: call.name,
+          args,
+          streamId,
+        };
+
+        // Execute
+        const result = await executeTool(call.name, args, this.cwd);
+
+        // Yield ToolCallResponse
+        yield {
+          type: DoughEventType.ToolCallResponse,
+          callId: call.call_id,
+          result: result.result,
+          isError: result.isError,
+          streamId,
+        };
+
+        toolResults.push({
+          call_id: call.call_id,
+          output: result.result,
+        });
+
+        // Check abort between tool executions
         if (options.signal?.aborted) {
           yield { type: DoughEventType.Aborted };
           return;
         }
-
-        const doughEvents = mapCodexEventToDoughEvents(
-          event,
-          streamId,
-          options.toolMiddleware
-        );
-
-        for (const de of doughEvents) {
-          // Track text accumulation
-          if (de.type === DoughEventType.ContentDelta) {
-            fullText += de.text;
-          }
-
-          // Capture usage from Finished events
-          if (de.type === DoughEventType.Finished && de.usage) {
-            lastUsage = de.usage;
-          }
-
-          // Emit ContentComplete before Finished
-          if (de.type === DoughEventType.Finished && fullText) {
-            yield {
-              type: DoughEventType.ContentComplete,
-              text: fullText,
-              usage: lastUsage,
-              streamId,
-            };
-          }
-
-          yield de;
-        }
-
-        // Capture thread ID from thread.started
-        if (event.type === "thread.started") {
-          this.activeThreadId = event.thread_id;
-        }
-      }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-
-      // If resuming a stale thread, retry with a fresh one
-      if (this.activeThreadId && msg.includes("session")) {
-        this.activeThreadId = null;
-        yield* this.send(messages, options);
-        return;
       }
 
+      // 3. Build input for next turn — include function_call items
+      //    followed by their function_call_output results
+      const nextInput: unknown[] = [];
+      for (const call of pendingCalls) {
+        nextInput.push({
+          type: "function_call",
+          id: call.id,
+          call_id: call.call_id,
+          name: call.name,
+          arguments: call.arguments,
+        });
+      }
+      for (const r of toolResults) {
+        nextInput.push({
+          type: "function_call_output",
+          call_id: r.call_id,
+          output: r.output,
+        });
+      }
+      input = nextInput;
+    }
+
+    // Emit ContentComplete if we accumulated any text
+    if (fullText) {
       yield {
-        type: DoughEventType.Error,
-        message: msg,
+        type: DoughEventType.ContentComplete,
+        text: fullText,
+        usage: totalUsage,
+        streamId,
       };
     }
+
+    // Finished
+    yield {
+      type: DoughEventType.Finished,
+      reason: turnCount >= maxTurns ? "max_turns" : "completed",
+      usage: totalUsage,
+    };
   }
 
-  async estimateTokens(messages: ThreadMessage[]): Promise<number> {
-    // Rough estimate: ~4 chars per token for English text
+  estimateTokens(messages: ThreadMessage[]): number {
     return messages.reduce(
       (sum, msg) => sum + Math.ceil(msg.content.length / 4),
       0
@@ -201,409 +357,343 @@ export class CodexProvider implements LLMProvider {
     model?: string;
   }): Promise<string> {
     if (options?.sessionId) {
-      this.activeThreadId = options.sessionId;
+      this.responseId = options.sessionId;
       return options.sessionId;
     }
-    // Thread ID assigned on first runStreamed() call
-    return this.activeThreadId ?? "pending";
+    return this.responseId ?? "pending";
   }
 
   async dispose(): Promise<void> {
-    this.activeThreadId = null;
+    this.responseId = null;
   }
-
-  // ── MCP support ────────────────────────────────────────────
 
   async setMcpServers(servers: McpServerMap): Promise<void> {
     this.mcpServers = { ...servers };
-    // MCP servers are configured at the Codex CLI level via config overrides.
-    // The Codex CLI discovers MCP servers from its own config; we store them
-    // here for status reporting. Full native pass-through would require
-    // thread-level config injection which the SDK doesn't expose yet.
   }
 
   async getMcpStatus(): Promise<McpServerStatus[]> {
     return Object.entries(this.mcpServers).map(([name, config]) => ({
       name,
-      connected: true,
+      connected: false,
       transport: config.transport,
       toolCount: 0,
     }));
   }
-}
 
-// ── Event mapping ──────────────────────────────────────────────
+  // ── SSE streaming ───────────────────────────────────────────────
 
-/**
- * Maps a Codex SDK ThreadEvent to zero or more DoughEvents.
- *
- * The Codex SDK yields high-level item events rather than raw tool_use blocks.
- * We map them to ToolCallRequest/ToolCallResponse pairs so the Dough session
- * loop can track them consistently with the Claude provider.
- *
- * Tool names are passed through from the Codex SDK's native item types
- * (e.g. "command_execution", "file_change", "web_search") rather than
- * being mapped to provider-specific names. For MCP tool calls, the
- * actual tool name (item.tool) is used. The TUI's formatToolName()
- * handles display labels for all known item types.
- *
- * Mapping:
- *   item.started  (command_execution) → ToolCallRequest  (name: "command_execution")
- *   item.completed (command_execution) → ToolCallResponse (with output)
- *   item.started  (file_change)       → ToolCallRequest  (name: "file_change")
- *   item.completed (file_change)      → ToolCallResponse
- *   item.started  (mcp_tool_call)     → ToolCallRequest  (name: item.tool)
- *   item.completed (mcp_tool_call)    → ToolCallResponse
- *   item.started/completed (agent_message) → ContentDelta
- *   item.started/completed (reasoning)     → Thought
- *   turn.completed                         → Finished
- *   turn.failed / error                    → Error
- */
-function mapCodexEventToDoughEvents(
-  event: ThreadEvent,
-  streamId: string,
-  _toolMiddleware?: ToolMiddleware[]
-): DoughEvent[] {
-  const events: DoughEvent[] = [];
+  private async *streamRequest(
+    auth: ResolvedAuth,
+    input: unknown[],
+    tools: ReturnType<typeof toOpenAIFunctions>,
+    previousResponseId: string | null,
+    options: SendOptions
+  ): AsyncGenerator<SSEParsedEvent> {
+    // Extract system/developer instructions from input or use default
+    const instructions =
+      options.systemPrompt ??
+      "You are a helpful AI coding assistant. Use the provided tools to help the user.";
 
-  switch (event.type) {
-    case "thread.started":
-      // No DoughEvent — thread ID captured in main loop
-      break;
+    const body: Record<string, unknown> = {
+      model: options.model ?? this.config.model,
+      instructions,
+      input,
+      tools,
+      stream: true,
+      store: false,
+    };
 
-    case "turn.started":
-      // No direct DoughEvent equivalent
-      break;
+    // previous_response_id is only valid when store=true (API key auth).
+    // The ChatGPT subscription endpoint requires store=false.
+    if (previousResponseId && body.store !== false) {
+      body.previous_response_id = previousResponseId;
+    }
 
-    case "turn.completed": {
-      const usage: UsageMetadata = {
-        inputTokens: event.usage?.input_tokens ?? 0,
-        outputTokens: event.usage?.output_tokens ?? 0,
-        cachedTokens: event.usage?.cached_input_tokens ?? 0,
-        totalTokens:
-          (event.usage?.input_tokens ?? 0) +
-          (event.usage?.output_tokens ?? 0),
-      };
-      events.push({
-        type: DoughEventType.Finished,
-        reason: "completed",
-        usage,
+    if (this.config.reasoningEffort) {
+      body.reasoning = { effort: this.config.reasoningEffort };
+    }
+
+    const url = `${auth.baseUrl}/responses`;
+
+    // Retry with exponential backoff for transient errors
+    let lastError: Error | null = null;
+    const delays = [1000, 2000, 4000];
+
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, delays[attempt - 1]));
+      }
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: auth.headers,
+        body: JSON.stringify(body),
+        signal: options.signal,
       });
-      break;
+
+      if (res.status === 429 || (res.status >= 500 && res.status < 600)) {
+        lastError = new Error(`API returned ${res.status}: ${await res.text()}`);
+        if (attempt < delays.length) continue;
+        throw lastError;
+      }
+
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error(`Responses API error (${res.status}): ${errBody}`);
+      }
+
+      if (!res.body) {
+        throw new Error("No response body");
+      }
+
+      // Parse SSE stream
+      yield* this.parseSSEStream(res.body);
+      return;
     }
 
-    case "turn.failed": {
-      events.push({
-        type: DoughEventType.Error,
-        message: event.error?.message ?? "Turn failed",
-      });
-      events.push({
-        type: DoughEventType.Finished,
-        reason: "completed",
-      });
-      break;
-    }
-
-    case "error": {
-      events.push({
-        type: DoughEventType.Error,
-        message: event.message ?? "Unknown error",
-      });
-      break;
-    }
-
-    case "item.started": {
-      events.push(...mapItemStarted(event.item, streamId));
-      break;
-    }
-
-    case "item.updated": {
-      events.push(...mapItemUpdated(event.item, streamId));
-      break;
-    }
-
-    case "item.completed": {
-      events.push(...mapItemCompleted(event.item, streamId));
-      break;
-    }
+    throw lastError ?? new Error("Request failed after retries");
   }
 
-  return events;
-}
+  private async *parseSSEStream(
+    body: ReadableStream<Uint8Array>
+  ): AsyncGenerator<SSEParsedEvent> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-/**
- * Map an item.started event to DoughEvents.
- * For tool-like items, emit a ToolCallRequest.
- * For content items, emit deltas/thoughts.
- */
-function mapItemStarted(item: ThreadItem, streamId: string): DoughEvent[] {
-  const events: DoughEvent[] = [];
+    // Track partial function calls being built up across events
+    const partialCalls = new Map<
+      string,
+      { call_id: string; name: string; arguments: string }
+    >();
 
-  switch (item.type) {
-    case "agent_message":
-      // Emit as content delta — the text will accumulate
-      if (item.text) {
-        events.push({
-          type: DoughEventType.ContentDelta,
-          text: item.text,
-          streamId,
-        });
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
+          if (!data || data === "[DONE]") continue;
+
+          let parsed: Record<string, unknown>;
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            continue;
+          }
+
+          const eventType = String(parsed.type ?? "");
+
+          // Text content delta
+          if (eventType === "response.output_text.delta") {
+            const delta = String(parsed.delta ?? "");
+            if (delta) {
+              yield { kind: "text_delta", text: delta };
+            }
+          }
+
+          // Reasoning/thinking delta
+          else if (
+            eventType === "response.reasoning.delta" ||
+            eventType === "response.reasoning_summary_text.delta"
+          ) {
+            const delta = String(parsed.delta ?? parsed.text ?? "");
+            if (delta) {
+              yield { kind: "reasoning_delta", text: delta };
+            }
+          }
+
+          // Function call argument delta — accumulate
+          else if (eventType === "response.function_call_arguments.delta") {
+            const itemId = String(parsed.item_id ?? "");
+            const delta = String(parsed.delta ?? "");
+            const existing = partialCalls.get(itemId);
+            if (existing) {
+              existing.arguments += delta;
+            }
+          }
+
+          // Output item added — start tracking function calls
+          else if (eventType === "response.output_item.added") {
+            const item = parsed.item as Record<string, unknown> | undefined;
+            if (item?.type === "function_call") {
+              partialCalls.set(String(item.id ?? ""), {
+                id: String(item.id ?? ""),
+                call_id: String(item.call_id ?? item.id ?? ""),
+                name: String(item.name ?? ""),
+                arguments: "",
+              });
+            }
+          }
+
+          // Output item done — finalize function calls
+          else if (eventType === "response.output_item.done") {
+            const item = parsed.item as Record<string, unknown> | undefined;
+            if (item?.type === "function_call") {
+              const itemId = String(item.id ?? "");
+              const partial = partialCalls.get(itemId);
+              const call: PendingFunctionCall = partial
+                ? {
+                    id: partial.id || String(item.id ?? ""),
+                    call_id: partial.call_id || String(item.call_id ?? item.id ?? ""),
+                    name: partial.name || String(item.name ?? ""),
+                    arguments: partial.arguments || String(item.arguments ?? "{}"),
+                  }
+                : {
+                    id: String(item.id ?? ""),
+                    call_id: String(item.call_id ?? item.id ?? ""),
+                    name: String(item.name ?? ""),
+                    arguments: String(item.arguments ?? "{}"),
+                  };
+              partialCalls.delete(itemId);
+              yield { kind: "function_call", call };
+            }
+          }
+
+          // Response completed
+          else if (
+            eventType === "response.completed" ||
+            eventType === "response.done"
+          ) {
+            const response = (parsed.response ?? parsed) as Record<
+              string,
+              unknown
+            >;
+            yield {
+              kind: "response_completed",
+              responseId: String(response.id ?? ""),
+              usage: response.usage as SSEUsage | undefined,
+            };
+          }
+
+          // Error
+          else if (eventType === "error") {
+            yield {
+              kind: "error",
+              message: String(
+                (parsed.error as Record<string, unknown>)?.message ??
+                  parsed.message ??
+                  "Unknown SSE error"
+              ),
+            };
+          }
+        }
       }
-      break;
-
-    case "reasoning":
-      if (item.text) {
-        events.push({
-          type: DoughEventType.Thought,
-          text: item.text,
-          streamId,
-        });
-      }
-      break;
-
-    case "command_execution":
-      events.push({
-        type: DoughEventType.ToolCallRequest,
-        callId: item.id,
-        name: item.type,
-        args: { command: item.command },
-        streamId,
-      });
-      break;
-
-    case "file_change":
-      events.push({
-        type: DoughEventType.ToolCallRequest,
-        callId: item.id,
-        name: item.type,
-        args: {
-          files: item.changes.map((c) => ({
-            path: c.path,
-            kind: c.kind,
-          })),
-        },
-        streamId,
-      });
-      break;
-
-    case "mcp_tool_call":
-      events.push({
-        type: DoughEventType.ToolCallRequest,
-        callId: item.id,
-        name: item.tool,
-        args: {
-          server: item.server,
-          ...(item.arguments as Record<string, unknown> ?? {}),
-        },
-        streamId,
-      });
-      break;
-
-    case "web_search":
-      events.push({
-        type: DoughEventType.ToolCallRequest,
-        callId: item.id,
-        name: item.type,
-        args: { query: item.query },
-        streamId,
-      });
-      break;
-
-    case "todo_list":
-      // No ToolCallRequest — informational only
-      break;
-
-    case "error":
-      events.push({
-        type: DoughEventType.Error,
-        message: item.message,
-      });
-      break;
+    } finally {
+      reader.releaseLock();
+    }
   }
-
-  return events;
 }
 
-/**
- * Map item.updated events. For streaming content, emit incremental deltas.
- */
-function mapItemUpdated(item: ThreadItem, streamId: string): DoughEvent[] {
-  const events: DoughEvent[] = [];
+// ── SSE event types ───────────────────────────────────────────────
 
-  switch (item.type) {
-    case "agent_message":
-      // Updated agent message — emit as delta (the text is the full accumulated text,
-      // but we treat updates as new content for now)
-      if (item.text) {
-        events.push({
-          type: DoughEventType.ContentDelta,
-          text: item.text,
-          streamId,
-        });
-      }
-      break;
+type SSEParsedEvent =
+  | { kind: "text_delta"; text: string }
+  | { kind: "reasoning_delta"; text: string }
+  | { kind: "function_call"; call: PendingFunctionCall }
+  | { kind: "response_completed"; responseId: string; usage?: SSEUsage }
+  | { kind: "error"; message: string };
 
-    case "reasoning":
-      if (item.text) {
-        events.push({
-          type: DoughEventType.Thought,
-          text: item.text,
-          streamId,
-        });
-      }
-      break;
-
-    case "command_execution":
-      // In-progress output — could emit as streaming tool output but
-      // the TUI doesn't render intermediate tool output, so skip.
-      break;
-
-    default:
-      break;
-  }
-
-  return events;
+interface SSEUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  input_tokens_details?: { cached_tokens?: number };
 }
 
-/**
- * Map item.completed events. For tool-like items, emit ToolCallResponse.
- */
-function mapItemCompleted(item: ThreadItem, streamId: string): DoughEvent[] {
-  const events: DoughEvent[] = [];
-
-  switch (item.type) {
-    case "agent_message":
-      // Final agent message — emit as delta if we haven't already
-      // The session loop accumulates all deltas into fullText.
-      if (item.text) {
-        events.push({
-          type: DoughEventType.ContentDelta,
-          text: item.text,
-          streamId,
-        });
-      }
-      break;
-
-    case "reasoning":
-      if (item.text) {
-        events.push({
-          type: DoughEventType.Thought,
-          text: item.text,
-          streamId,
-        });
-      }
-      break;
-
-    case "command_execution":
-      events.push({
-        type: DoughEventType.ToolCallResponse,
-        callId: item.id,
-        result: item.aggregated_output ?? "",
-        isError: item.status === "failed" || (item.exit_code != null && item.exit_code !== 0),
-        streamId,
-      });
-      break;
-
-    case "file_change":
-      events.push({
-        type: DoughEventType.ToolCallResponse,
-        callId: item.id,
-        result: item.changes
-          .map(
-            (c) => `${c.kind}: ${c.path}`
-          )
-          .join("\n"),
-        isError: item.status === "failed",
-        streamId,
-      });
-      break;
-
-    case "mcp_tool_call":
-      events.push({
-        type: DoughEventType.ToolCallResponse,
-        callId: item.id,
-        result: item.error
-          ? item.error.message
-          : item.result
-            ? item.result.structured_content ?? item.result.content
-            : "",
-        isError: item.status === "failed" || !!item.error,
-        streamId,
-      });
-      break;
-
-    case "web_search":
-      events.push({
-        type: DoughEventType.ToolCallResponse,
-        callId: item.id,
-        result: `Web search completed: ${item.query}`,
-        isError: false,
-        streamId,
-      });
-      break;
-
-    case "todo_list":
-      // Informational — no ToolCallResponse needed
-      break;
-
-    case "error":
-      events.push({
-        type: DoughEventType.Error,
-        message: item.message,
-      });
-      break;
-  }
-
-  return events;
-}
-
-// ── Input builder ──────────────────────────────────────────────
+// ── Message conversion ────────────────────────────────────────────
 
 /**
- * Build the input for thread.runStreamed().
- *
- * Plain text → string (fast path)
- * Text + image attachments → UserInput[] with local_image entries
- *
- * Note: The Codex SDK supports local_image inputs by file path, but our
- * Attachment type carries base64 data. We write to temp files for images.
+ * Convert ThreadMessage[] to OpenAI Responses API input format.
  */
-function buildInput(
-  text: string,
+function convertMessages(
+  messages: ThreadMessage[],
   options: SendOptions
-): string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }> {
-  if (!options.attachments || options.attachments.length === 0) {
-    return text;
+): unknown[] {
+  const input: unknown[] = [];
+
+  for (const msg of messages) {
+    switch (msg.role) {
+      case "system":
+        // System messages go into the input as a developer message
+        input.push({
+          role: "developer",
+          content: msg.content,
+        });
+        break;
+
+      case "user": {
+        const content: unknown[] = [];
+
+        // Add image attachments if present
+        if (options.attachments && msg === messages[messages.length - 1]) {
+          for (const att of options.attachments) {
+            content.push({
+              type: "input_image",
+              image_url: `data:${att.mimeType};base64,${att.data}`,
+            });
+          }
+        }
+
+        content.push({ type: "input_text", text: msg.content });
+        input.push({ role: "user", content });
+        break;
+      }
+
+      case "assistant": {
+        // Assistant message with potential tool calls from metadata
+        const toolCalls = msg.metadata?.toolCalls as
+          | Array<{
+              callId: string;
+              name: string;
+              args: Record<string, unknown>;
+              result?: unknown;
+            }>
+          | undefined;
+
+        if (toolCalls && toolCalls.length > 0) {
+          // Add the assistant's text as a message item
+          if (msg.content) {
+            input.push({
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: msg.content }],
+            });
+          }
+
+          // Add function calls and their outputs
+          for (const tc of toolCalls) {
+            input.push({
+              type: "function_call",
+              id: tc.callId,
+              call_id: tc.callId,
+              name: tc.name,
+              arguments: JSON.stringify(tc.args),
+            });
+            if (tc.result !== undefined) {
+              input.push({
+                type: "function_call_output",
+                call_id: tc.callId,
+                output: String(tc.result),
+              });
+            }
+          }
+        } else if (msg.content) {
+          input.push({
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: msg.content }],
+          });
+        }
+        break;
+      }
+    }
   }
 
-  // Write base64 images to temp files and pass paths
-  const inputs: Array<
-    { type: "text"; text: string } | { type: "local_image"; path: string }
-  > = [];
-
-  for (const attachment of options.attachments) {
-    const tmpPath = `/tmp/dough-codex-${crypto.randomUUID()}.${mimeToExt(attachment.mimeType)}`;
-    const buffer = Buffer.from(attachment.data, "base64");
-    // Synchronous write is fine here — temp files are small images
-    Bun.write(tmpPath, buffer);
-    inputs.push({ type: "local_image", path: tmpPath });
-  }
-
-  inputs.push({ type: "text", text });
-  return inputs;
-}
-
-function mimeToExt(
-  mime: "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-): string {
-  switch (mime) {
-    case "image/png":
-      return "png";
-    case "image/jpeg":
-      return "jpg";
-    case "image/gif":
-      return "gif";
-    case "image/webp":
-      return "webp";
-  }
+  return input;
 }
