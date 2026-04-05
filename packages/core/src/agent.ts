@@ -10,7 +10,7 @@ import {
 import { DoughSession } from "./session.ts";
 import type { LLMProvider, ToolMiddleware } from "./providers/provider.ts";
 import { ClaudeProvider, type ClaudeProviderConfig } from "./providers/claude.ts";
-import { CodexProvider } from "./providers/codex.ts";
+import { CodexProvider, type CodexProviderConfig } from "./providers/codex.ts";
 import { buildAgentsContext } from "./agents-md.ts";
 import { LLMSummaryGenerator } from "./summarizer.ts";
 import { McpManager } from "./mcp/manager.ts";
@@ -40,6 +40,8 @@ export interface DoughAgentConfig {
   summaryGenerator?: SummaryGenerator;
   /** Claude-specific config passed through to ClaudeProvider */
   claude?: Omit<ClaudeProviderConfig, "model" | "systemPrompt">;
+  /** Codex-specific config passed through to CodexProvider */
+  codex?: Omit<CodexProviderConfig, "model">;
   /** MCP servers to configure at startup */
   mcpServers?: McpServerMap;
   /** Set false to skip discovering skills. Defaults to true. */
@@ -115,7 +117,11 @@ export class DoughAgent {
           });
           break;
         case "codex":
-          this.provider = new CodexProvider({ model: config.model });
+          this.provider = new CodexProvider({
+            model: config.model,
+            cwd: config.cwd,
+            ...config.codex,
+          });
           break;
         default:
           throw new Error(`Unknown provider: ${config.provider}`);
@@ -285,6 +291,49 @@ export class DoughAgent {
 
   getProvider(): LLMProvider {
     return this.provider;
+  }
+
+  /**
+   * Hot-swap the active LLM provider at runtime.
+   * Updates the runtime client registration so extensions see the new provider.
+   */
+  setProvider(newProvider: LLMProvider): void {
+    this.provider = newProvider;
+    this.runtime.registerClient(wrapLLMProviderAsClient(newProvider));
+  }
+
+  /**
+   * Change the active model. Takes effect on the next provider query.
+   */
+  setModel(model: string): void {
+    this.config.model = model;
+  }
+
+  /** Get the currently configured model alias. */
+  getModel(): string | undefined {
+    return this.config.model;
+  }
+
+  /**
+   * Create a provider instance by name, using the current agent config.
+   */
+  createProvider(name: "claude" | "codex"): LLMProvider {
+    switch (name) {
+      case "claude":
+        return new ClaudeProvider({
+          model: this.config.model,
+          systemPrompt: this.config.systemPrompt,
+          ...this.config.claude,
+        });
+      case "codex":
+        return new CodexProvider({
+          model: this.config.model,
+          cwd: this.config.cwd,
+          ...this.config.codex,
+        });
+      default:
+        throw new Error(`Unknown provider: ${name}`);
+    }
   }
 
   getMcpManager(): McpManager {

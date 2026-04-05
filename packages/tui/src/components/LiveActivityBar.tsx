@@ -51,7 +51,8 @@ export function LiveActivityBar({ messages }: LiveActivityBarProps) {
     const isBash =
       pendingTool.name === "Bash" ||
       pendingTool.name === "bash" ||
-      pendingTool.name === "execute";
+      pendingTool.name === "execute" ||
+      pendingTool.name === "command_execution";
     const cmd = isBash && pendingTool.args.command
       ? String(pendingTool.args.command).split("\n")[0]?.slice(0, 60) ?? ""
       : "";

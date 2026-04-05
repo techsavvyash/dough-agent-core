@@ -8,7 +8,6 @@
     "@anthropic-ai/claude-agent-sdk": "latest",
     "@dough/protocol": "workspace:*",
     "@dough/threads": "workspace:*",
-    "@openai/codex-sdk": "latest",
     "diff": "^8.0.3"
   },
   "devDependencies": {

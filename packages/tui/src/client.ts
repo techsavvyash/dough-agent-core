@@ -236,6 +236,12 @@ export class DoughClient {
     return () => this.threadsHandlers.delete(handler);
   }
 
+  // ── Model switching ─────────────────────────────────────────
+
+  switchModel(model: string): void {
+    this.sendMessage({ kind: "switch_model", model });
+  }
+
   // ── MCP commands ────────────────────────────────────────────
 
   addMcpServer(name: string, config: McpServerConfig): void {
