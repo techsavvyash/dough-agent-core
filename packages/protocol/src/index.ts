@@ -36,3 +36,10 @@ export type {
   RuntimeCommandMeta,
   RuntimePanelMeta,
 } from "./runtime.ts";
+export type { ModelInfo } from "./models.ts";
+export {
+  AVAILABLE_MODELS,
+  getModelsForProvider,
+  getDefaultModelForProvider,
+  findModel,
+} from "./models.ts";

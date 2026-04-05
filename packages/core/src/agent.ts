@@ -303,6 +303,18 @@ export class DoughAgent {
   }
 
   /**
+   * Change the active model. Takes effect on the next provider query.
+   */
+  setModel(model: string): void {
+    this.config.model = model;
+  }
+
+  /** Get the currently configured model alias. */
+  getModel(): string | undefined {
+    return this.config.model;
+  }
+
+  /**
    * Create a provider instance by name, using the current agent config.
    */
   createProvider(name: "claude" | "codex"): LLMProvider {

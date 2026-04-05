@@ -18,6 +18,7 @@ import { StatusBar, type ApprovalMode } from "./components/StatusBar.tsx";
 import { HistorySearch } from "./components/HistorySearch.tsx";
 import { CopyMode } from "./components/CopyMode.tsx";
 import { SessionBrowser } from "./components/SessionBrowser.tsx";
+import { ModelSelector } from "./components/ModelSelector.tsx";
 import { useGitBranch } from "./hooks/useGitBranch.ts";
 import { useSessions } from "./hooks/useSessions.ts";
 import { colors } from "./theme.ts";
@@ -66,6 +67,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
   const [showHistorySearch, setShowHistorySearch] = useState(false);
   const [showCopyMode, setShowCopyMode] = useState(false);
   const [showSessionBrowser, setShowSessionBrowser] = useState(false);
+  const [showModelSelector, setShowModelSelector] = useState(false);
   const [composerFillText, setComposerFillText] = useState<string | null>(null);
   /** Flat list of every bash tool call across all messages — used by BashOutputView. */
   const bashCalls = useMemo<BashCallEntry[]>(() => {
@@ -86,7 +88,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
   }, [messages]);
 
   const noOverlay = !showPalette && !showDiffView && !showThreadViewer && !showBashOutput
-    && !showCopyMode && !showSessionBrowser;
+    && !showCopyMode && !showSessionBrowser && !showModelSelector;
 
   // Load saved theme preference on mount
   useEffect(() => {
@@ -179,6 +181,9 @@ export function App({ serverUrl, provider, model }: AppProps) {
           break;
         case "bash.panel":
           if (bashCalls.length > 0) setShowBashOutput(true);
+          break;
+        case "model.panel":
+          setShowModelSelector(true);
           break;
       }
     });
@@ -344,6 +349,15 @@ export function App({ serverUrl, provider, model }: AppProps) {
     [client, clearMessages, addSystemMessage]
   );
 
+  const handleModelSelect = useCallback(
+    (modelId: string) => {
+      setShowModelSelector(false);
+      client.switchModel(modelId);
+      addSystemMessage(`Switching model to ${modelId}...`);
+    },
+    [client, addSystemMessage],
+  );
+
   // Full-screen copy mode overlay
   if (showCopyMode) {
     return (
@@ -452,6 +466,16 @@ export function App({ serverUrl, provider, model }: AppProps) {
         />
       )}
 
+      {/* ── Model selector ───────────────────────── inline above composer */}
+      {showModelSelector && (
+        <ModelSelector
+          provider={session?.provider ?? provider}
+          currentModel={session?.model ?? ""}
+          onSelect={handleModelSelect}
+          onClose={() => setShowModelSelector(false)}
+        />
+      )}
+
       {/* ── History search ─────────────────────── inline above composer */}
       {showHistorySearch && (
         <HistorySearch
@@ -471,11 +495,12 @@ export function App({ serverUrl, provider, model }: AppProps) {
         queuedCount={queuedCount}
         onAbort={abort}
         onOpenPalette={() => setShowPalette(true)}
-        paletteOpen={showPalette || showHistorySearch}
+        paletteOpen={showPalette || showHistorySearch || showModelSelector}
         stats={stats}
         hasChanges={hasChanges}
         fillText={composerFillText}
         onFillConsumed={() => setComposerFillText(null)}
+        messages={messages}
       />
     </box>
   );

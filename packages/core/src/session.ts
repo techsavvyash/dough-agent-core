@@ -75,6 +75,13 @@ export class DoughSession {
     this.provider = provider;
   }
 
+  /**
+   * Change the model used for subsequent turns.
+   */
+  setModel(model: string): void {
+    this.model = model;
+  }
+
   async *send(prompt: string, attachments?: Attachment[]): AsyncGenerator<DoughEvent> {
     if (!this.activeThreadId) {
       await this.initialize();

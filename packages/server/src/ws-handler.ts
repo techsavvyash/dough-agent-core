@@ -9,6 +9,7 @@ import type {
   RuntimeCommandMeta,
   RuntimePanelMeta,
 } from "@dough/protocol";
+import { getModelsForProvider, getDefaultModelForProvider } from "@dough/protocol";
 import type { DoughSession } from "@dough/core";
 import { DoughAgent } from "@dough/core";
 import type { DiffCheckpointExtensionInstance } from "@dough/core";
@@ -145,6 +146,12 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
     args?: Record<string, unknown>,
   ): Promise<void> {
     switch (commandId) {
+      // Palette shortcuts delegate to the generic provider_switch handler
+      case "session.provider_claude":
+        return handleCommandSideEffects(ws, "session.provider_switch", { provider: "claude" });
+      case "session.provider_codex":
+        return handleCommandSideEffects(ws, "session.provider_switch", { provider: "codex" });
+
       case "session.provider_switch": {
         const target = String(args?.provider ?? "").toLowerCase();
         if (target !== "claude" && target !== "codex") {
@@ -171,9 +178,17 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
         const newProvider = agent.createProvider(target);
         agent.setProvider(newProvider);
 
-        // Update the active session's provider reference
+        // Reset model to the new provider's default
+        const defaultModel = getDefaultModelForProvider(target);
+        const newModelId = defaultModel?.id;
+        if (newModelId) {
+          agent.setModel(newModelId);
+        }
+
+        // Update the active session's provider and model references
         if (ws.data.session) {
           ws.data.session.setProvider(newProvider);
+          if (newModelId) ws.data.session.setModel(newModelId);
         }
 
         // Send updated session_info so the TUI updates its provider display
@@ -188,7 +203,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
               activeThreadId: session.currentThreadId!,
               threads: threads.map((t) => ThreadManager.toMeta(t)),
               provider: target,
-              model: undefined,
+              model: newModelId,
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             },
@@ -875,6 +890,64 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
             const pushMsg: ServerMessage = { kind: "todos_update", todos };
             ws.send(JSON.stringify(pushMsg));
           }
+          break;
+        }
+
+        // ── Model switching ─────────────────────────────────────────
+
+        case "switch_model": {
+          const targetModel = msg.model;
+          const currentProvider = agent.getProvider().name;
+          const validModels = getModelsForProvider(currentProvider);
+
+          if (!validModels.find((m) => m.id === targetModel)) {
+            const err: ServerMessage = {
+              kind: "error",
+              message: `Model "${targetModel}" is not available for provider "${currentProvider}".`,
+            };
+            ws.send(JSON.stringify(err));
+            break;
+          }
+
+          // Update model on both agent config and active session
+          agent.setModel(targetModel);
+          if (ws.data.session) {
+            ws.data.session.setModel(targetModel);
+          }
+
+          // Send updated session_info so the TUI updates its model display
+          const session = ws.data.session;
+          if (session) {
+            const tm = agent.getThreadManager();
+            const threads = await tm.listThreads(session.id);
+            const reply: ServerMessage = {
+              kind: "session_info",
+              session: {
+                id: session.id,
+                activeThreadId: session.currentThreadId!,
+                threads: threads.map((t) => ThreadManager.toMeta(t)),
+                provider: currentProvider,
+                model: targetModel,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+            };
+            ws.send(JSON.stringify(reply));
+          }
+
+          // Persist updated model
+          if (store && session) {
+            const rec = await store.loadSession(session.id);
+            if (rec) {
+              await store.saveSession({
+                ...rec,
+                model: targetModel,
+                updatedAt: new Date().toISOString(),
+              });
+            }
+          }
+
+          console.log(`[ws] model switched to ${targetModel} (provider: ${currentProvider})`);
           break;
         }
 
