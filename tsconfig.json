@@ -17,6 +17,7 @@
     "noImplicitOverride": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
+    "importsNotUsedAsValues": "error",
     "noPropertyAccessFromIndexSignature": false,
     "paths": {
       "@dough/protocol": ["./packages/protocol/src"],
