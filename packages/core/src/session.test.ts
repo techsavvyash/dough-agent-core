@@ -371,6 +371,57 @@ describe("DoughSession — token limit enforcement", () => {
     expect(assistantMsgs[0].content).toBe("response text");
   });
 
+  test("excludeFromLLM messages are filtered before reaching provider", async () => {
+    // Track what messages the provider actually receives
+    let receivedMessages: ThreadMessage[] = [];
+    const spyProvider: LLMProvider = {
+      name: "spy",
+      maxContextTokens: 200_000,
+      async *send(messages, _options): AsyncGenerator<DoughEvent> {
+        receivedMessages = messages;
+        const streamId = crypto.randomUUID();
+        yield { type: DoughEventType.ContentDelta, text: "ok", streamId };
+        yield { type: DoughEventType.ContentComplete, text: "ok", streamId };
+        yield { type: DoughEventType.Finished, reason: "completed" };
+      },
+      estimateTokens(messages) {
+        return messages.reduce((s, m) => s + m.tokenEstimate, 0);
+      },
+    };
+
+    const { session, tm } = createSession(10_000, spyProvider);
+    await session.initialize();
+    const threadId = session.currentThreadId!;
+
+    // Add a meta message that should be excluded from LLM context
+    await tm.addMessage(threadId, {
+      id: crypto.randomUUID(),
+      role: "system",
+      content: "Provider switched: claude → codex",
+      tokenEstimate: 0,
+      timestamp: new Date().toISOString(),
+      metadata: { systemType: "provider_switch", excludeFromLLM: true },
+    });
+
+    await collectEvents(session.send("hello after switch"));
+
+    // The provider should receive user message but NOT the meta message
+    const systemMsgs = receivedMessages.filter(m => m.role === "system");
+    expect(systemMsgs).toHaveLength(0);
+
+    // The user message should still arrive
+    const userMsgs = receivedMessages.filter(m => m.role === "user");
+    expect(userMsgs.length).toBeGreaterThanOrEqual(1);
+
+    // But the meta message should still be persisted in the thread
+    const thread = await tm.getThread(threadId);
+    const persistedSystem = thread!.messages.filter(
+      m => m.metadata?.excludeFromLLM
+    );
+    expect(persistedSystem).toHaveLength(1);
+    expect(persistedSystem[0].content).toContain("Provider switched");
+  });
+
   test("abort stops streaming and yields Aborted event", async () => {
     // Create a slow provider that we can abort mid-stream
     const slowProvider: LLMProvider = {

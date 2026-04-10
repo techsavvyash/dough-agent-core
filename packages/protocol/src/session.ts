@@ -12,6 +12,8 @@ export interface ThreadMeta {
   status: ThreadStatus;
   tokenCount: number;
   maxTokens: number;
+  /** Cumulative actual LLM usage (input + output tokens consumed). */
+  tokensUsed: number;
   messageCount: number;
   summary?: string;
   createdAt: string;

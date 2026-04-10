@@ -9,6 +9,7 @@ import type {
   RuntimeCommandMeta,
   RuntimePanelMeta,
 } from "@dough/protocol";
+import { getModelsForProvider, getDefaultModelForProvider } from "@dough/protocol";
 import type { DoughSession } from "@dough/core";
 import { DoughAgent } from "@dough/core";
 import type { DiffCheckpointExtensionInstance } from "@dough/core";
@@ -142,13 +143,107 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
   async function handleCommandSideEffects(
     ws: ServerWebSocket<WSData>,
     commandId: string,
+    args?: Record<string, unknown>,
   ): Promise<void> {
     switch (commandId) {
+      // Palette shortcuts delegate to the generic provider_switch handler
+      case "session.provider_claude":
+        return handleCommandSideEffects(ws, "session.provider_switch", { provider: "claude" });
+      case "session.provider_codex":
+        return handleCommandSideEffects(ws, "session.provider_switch", { provider: "codex" });
+
+      case "session.provider_switch": {
+        const target = String(args?.provider ?? "").toLowerCase();
+        if (target !== "claude" && target !== "codex") {
+          const err: ServerMessage = {
+            kind: "error",
+            message: `Invalid provider "${target}". Use "claude" or "codex".`,
+          };
+          ws.send(JSON.stringify(err));
+          return;
+        }
+
+        const currentProvider = agent.getProvider().name;
+        if (currentProvider === target) {
+          const notify: ServerMessage = {
+            kind: "runtime:notify",
+            message: `Already using ${target}.`,
+            level: "info",
+          };
+          ws.send(JSON.stringify(notify));
+          return;
+        }
+
+        // Create new provider and hot-swap it
+        const newProvider = agent.createProvider(target);
+        agent.setProvider(newProvider);
+
+        // Reset model to the new provider's default
+        const defaultModel = getDefaultModelForProvider(target);
+        const newModelId = defaultModel?.id;
+        if (newModelId) {
+          agent.setModel(newModelId);
+        }
+
+        // Update the active session's provider and model references
+        if (ws.data.session) {
+          ws.data.session.setProvider(newProvider);
+          if (newModelId) ws.data.session.setModel(newModelId);
+        }
+
+        // Send updated session_info so the TUI updates its provider display
+        const session = ws.data.session;
+        if (session) {
+          const tm = agent.getThreadManager();
+          const threads = await tm.listThreads(session.id);
+          const reply: ServerMessage = {
+            kind: "session_info",
+            session: {
+              id: session.id,
+              activeThreadId: session.currentThreadId!,
+              threads: threads.map((t) => ThreadManager.toMeta(t)),
+              provider: target,
+              model: newModelId,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          };
+          ws.send(JSON.stringify(reply));
+        }
+
+        // Persist a meta message in the thread so it survives TUI restarts
+        if (session?.currentThreadId) {
+          const tm = agent.getThreadManager();
+          await tm.addMetaMessage(session.currentThreadId, {
+            id: crypto.randomUUID(),
+            role: "system",
+            content: `Provider switched: ${currentProvider} → ${target}${newModelId ? ` (model: ${newModelId})` : ""}`,
+            tokenEstimate: 0,
+            timestamp: new Date().toISOString(),
+            metadata: { systemType: "provider_switch", excludeFromLLM: true },
+          });
+        }
+
+        console.log(`[ws] provider switched: ${currentProvider} → ${target}`);
+        break;
+      }
+
       case "session.thread_fork": {
         const session = ws.data.session;
         if (!session?.currentThreadId) return;
         const tm = agent.getThreadManager();
         const result = await tm.fork(session.currentThreadId);
+
+        // Persist a meta message in the original thread
+        await tm.addMessage(result.originalThread.id, {
+          id: crypto.randomUUID(),
+          role: "system",
+          content: `Thread forked → ${result.forkedThread.id.slice(0, 8)}`,
+          tokenEstimate: 0,
+          timestamp: new Date().toISOString(),
+          metadata: { systemType: "thread_fork", excludeFromLLM: true },
+        });
+
         const reply: ServerMessage = {
           kind: "event",
           event: {
@@ -238,8 +333,28 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
       ws.send(JSON.stringify(statsMsg));
     });
 
+    let turnTokensUsed = 0;
+
     try {
       for await (const event of session.send(prompt, attachments)) {
+        // Capture total tokens from Finished events for persistence
+        if (event.type === DoughEventType.Finished && event.usage) {
+          turnTokensUsed += event.usage.totalTokens;
+        }
+
+        // Persist meta message when a thread handoff occurs
+        if (event.type === DoughEventType.ThreadHandoff) {
+          const tm = agent.getThreadManager();
+          await tm.addMetaMessage(event.fromThreadId, {
+            id: crypto.randomUUID(),
+            role: "system",
+            content: `Thread handed off → ${event.toThreadId.slice(0, 8)}`,
+            tokenEstimate: 0,
+            timestamp: new Date().toISOString(),
+            metadata: { systemType: "thread_handoff", excludeFromLLM: true },
+          });
+        }
+
         // Platform events (attribution, diff tracking) are handled by
         // extensions via the runtime event bus in DoughSession.send().
         // We just relay DoughEvents to the client.
@@ -262,6 +377,12 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
         // No-op when a handoff summary already exists.
         await agent.getThreadManager()
           .setThreadTitle(session.currentThreadId, deriveTitle(prompt));
+
+        // Persist cumulative LLM token usage to the thread
+        if (turnTokensUsed > 0) {
+          await agent.getThreadManager()
+            .addTokensUsed(session.currentThreadId, turnTokensUsed);
+        }
       }
 
       if (store && session.currentThreadId) {
@@ -657,6 +778,17 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           if (!session) return;
           const tm = agent.getThreadManager();
           const result = await tm.fork(msg.threadId, msg.forkPoint);
+
+          // Persist a meta message in the original thread
+          await tm.addMetaMessage(result.originalThread.id, {
+            id: crypto.randomUUID(),
+            role: "system",
+            content: `Thread forked → ${result.forkedThread.id.slice(0, 8)}`,
+            tokenEstimate: 0,
+            timestamp: new Date().toISOString(),
+            metadata: { systemType: "thread_fork", excludeFromLLM: true },
+          });
+
           const reply: ServerMessage = {
             kind: "event",
             event: {
@@ -702,6 +834,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
               status: t.status,
               tokenCount: t.tokenCount,
               maxTokens: t.maxTokens,
+              tokensUsed: t.tokensUsed,
               messageCount: t.messageCount,
               summary: t.summary,
               createdAt: t.createdAt,
@@ -822,6 +955,77 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           break;
         }
 
+        // ── Model switching ─────────────────────────────────────────
+
+        case "switch_model": {
+          const targetModel = msg.model;
+          const currentProvider = agent.getProvider().name;
+          const validModels = getModelsForProvider(currentProvider);
+
+          if (!validModels.find((m) => m.id === targetModel)) {
+            const err: ServerMessage = {
+              kind: "error",
+              message: `Model "${targetModel}" is not available for provider "${currentProvider}".`,
+            };
+            ws.send(JSON.stringify(err));
+            break;
+          }
+
+          // Update model on both agent config and active session
+          agent.setModel(targetModel);
+          if (ws.data.session) {
+            ws.data.session.setModel(targetModel);
+          }
+
+          // Send updated session_info so the TUI updates its model display
+          const session = ws.data.session;
+          if (session) {
+            const tm = agent.getThreadManager();
+            const threads = await tm.listThreads(session.id);
+            const reply: ServerMessage = {
+              kind: "session_info",
+              session: {
+                id: session.id,
+                activeThreadId: session.currentThreadId!,
+                threads: threads.map((t) => ThreadManager.toMeta(t)),
+                provider: currentProvider,
+                model: targetModel,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+            };
+            ws.send(JSON.stringify(reply));
+          }
+
+          // Persist updated model
+          if (store && session) {
+            const rec = await store.loadSession(session.id);
+            if (rec) {
+              await store.saveSession({
+                ...rec,
+                model: targetModel,
+                updatedAt: new Date().toISOString(),
+              });
+            }
+          }
+
+          // Persist a meta message in the thread so it survives TUI restarts
+          if (session?.currentThreadId) {
+            const tm = agent.getThreadManager();
+            await tm.addMetaMessage(session.currentThreadId, {
+              id: crypto.randomUUID(),
+              role: "system",
+              content: `Model switched to ${targetModel}`,
+              tokenEstimate: 0,
+              timestamp: new Date().toISOString(),
+              metadata: { systemType: "model_switch", excludeFromLLM: true },
+            });
+          }
+
+          console.log(`[ws] model switched to ${targetModel} (provider: ${currentProvider})`);
+          break;
+        }
+
         // ── Runtime messages ────────────────────────────────────────
 
         case "runtime:get_contributions": {
@@ -868,7 +1072,7 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           // Server-side effects for commands that need access to the
           // agent/session/store — the extension handles UI intents (notify,
           // openPanel) but these operations require server-level access.
-          await handleCommandSideEffects(ws, msg.commandId);
+          await handleCommandSideEffects(ws, msg.commandId, msg.args);
           break;
         }
 

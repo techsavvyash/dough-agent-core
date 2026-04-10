@@ -321,6 +321,45 @@ describe("ThreadManager", () => {
     });
   });
 
+  describe("addMetaMessage", () => {
+    test("appends to thread regardless of status", async () => {
+      const tm = createManager(200);
+      const thread = await tm.createThread("s1");
+      await tm.addMessage(thread.id, makeMessage("user", "fill", 250));
+      const result = await tm.handoff(thread.id);
+
+      // Old thread is now "full" — addMessage would throw, but addMetaMessage should work
+      expect(result.fromThread.status).toBe("full");
+
+      await tm.addMetaMessage(result.fromThread.id, {
+        id: crypto.randomUUID(),
+        role: "system",
+        content: "Thread handed off → new-thread",
+        tokenEstimate: 0,
+        timestamp: new Date().toISOString(),
+        metadata: { systemType: "thread_handoff", excludeFromLLM: true },
+      });
+
+      const updated = await tm.getThread(result.fromThread.id);
+      const meta = updated!.messages.filter(m => m.metadata?.excludeFromLLM);
+      expect(meta).toHaveLength(1);
+      expect(meta[0].content).toContain("handed off");
+    });
+
+    test("silently skips if thread does not exist", async () => {
+      const tm = createManager();
+      // Should not throw
+      await tm.addMetaMessage("nonexistent-id", {
+        id: crypto.randomUUID(),
+        role: "system",
+        content: "test",
+        tokenEstimate: 0,
+        timestamp: new Date().toISOString(),
+        metadata: { excludeFromLLM: true },
+      });
+    });
+  });
+
   describe("deleteSession", () => {
     test("removes all threads for a session", async () => {
       const tm = createManager();

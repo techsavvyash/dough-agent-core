@@ -49,6 +49,16 @@ describe("Composer", () => {
   test("shows thinking state when streaming", async () => {
     const onSubmit = createSpy();
     const onAbort = createSpy();
+    const streamingMessages = [
+      {
+        id: "1",
+        role: "assistant" as const,
+        content: "",
+        timestamp: new Date().toISOString(),
+        isStreaming: true,
+        thought: "Let me think...",
+      },
+    ];
 
     const { captureCharFrame, renderOnce } = await testRender(
       <Composer
@@ -58,6 +68,7 @@ describe("Composer", () => {
         onAbort={onAbort}
         stats={emptyStats}
         hasChanges={false}
+        messages={streamingMessages}
       />,
       { width: 60, height: 10 }
     );

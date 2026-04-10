@@ -35,7 +35,7 @@ const SIDEBAR_W_FRAC = 0.28;
  *   Ctrl+O / Esc — close
  */
 export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
-  const { width, height } = useTerminalDimensions();
+  const { width } = useTerminalDimensions();
   const isNarrow = width < 80;
   // Default to the last (most recent) call
   const [selectedIndex, setSelectedIndex] = useState(
@@ -43,17 +43,8 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
   );
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("sidebar");
-  const [sidebarScrollTop, setSidebarScrollTop] = useState(
-    // Start scrolled to the last item
-    Math.max(0, calls.length - 1)
-  );
-  const [outputScrollTop, setOutputScrollTop] = useState(0);
   // On narrow screens, always hide sidebar and focus output
   const effectiveSidebarVisible = sidebarVisible && !isNarrow;
-
-  // Header rule+stat+rule = 3, footer rule = 1, sidebar index indicator = 1
-  const SIDEBAR_CHROME = 5;
-  const sidebarViewport = Math.max(1, height - SIDEBAR_CHROME);
 
   useKeyboard((key) => {
     if (key.name === "escape" || (key.ctrl && key.name === "o")) {
@@ -67,17 +58,13 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
       // j/k/↑/↓ navigate commands when sidebar owns focus.
       // When output is focused, <scrollbox focused> scrolls natively.
       if (key.name === "up" || key.name === "k") {
-        setOutputScrollTop(0);
         setSelectedIndex((i) => {
           const next = i > 0 ? i - 1 : calls.length - 1;
-          setSidebarScrollTop((st) => adjustScrollFlat(next, st, sidebarViewport));
           return next;
         });
       } else if (key.name === "down" || key.name === "j") {
-        setOutputScrollTop(0);
         setSelectedIndex((i) => {
           const next = i < calls.length - 1 ? i + 1 : 0;
-          setSidebarScrollTop((st) => adjustScrollFlat(next, st, sidebarViewport));
           return next;
         });
       } else if (key.name === "b") {
@@ -85,12 +72,8 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
         if (sidebarVisible) setFocusedPanel("output");
       }
     } else {
-      // output panel focused — j/k scroll via controlled scrollbox
-      if (key.name === "up" || key.name === "k") {
-        setOutputScrollTop((t) => Math.max(0, t - 3));
-      } else if (key.name === "down" || key.name === "j") {
-        setOutputScrollTop((t) => t + 3);
-      } else if (key.name === "b") {
+      // output panel focused — scrolling is natively handled by scrollbox
+      if (key.name === "b") {
         setSidebarVisible((v) => !v);
       }
     }
@@ -163,9 +146,8 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
             width={sidebarW}
             flexDirection="column"
             border={["right"]}
-            borderFg={focusedPanel === "sidebar" ? colors.accent : colors.border}
           >
-            <scrollbox flex={1} scrollTop={sidebarScrollTop}>
+            <scrollbox flex={1}>
               {calls.map((call, i) => {
                 const isSel = i === selectedIndex;
                 const shortCmd = truncateCommand(call.command, sidebarW - 6);
@@ -210,11 +192,10 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
           )}
           <box height={1}><text fg={colors.border}>{hrule(width)}</text></box>
 
-          {/* Scrollable output — scrollTop is controlled; j/k are handled in useKeyboard */}
+          {/* Scrollable output — j/k are handled in useKeyboard */}
           <scrollbox
             flex={1}
             paddingX={2}
-            scrollTop={outputScrollTop}
           >
             {sel ? (
               sel.output ? (
@@ -234,16 +215,6 @@ export function BashOutputView({ calls, onClose }: BashOutputViewProps) {
       <box height={1}><text fg={colors.border}>{rule}</text></box>
     </box>
   );
-}
-
-/**
- * Return a scrollTop that keeps a flat list item (all items height=1) visible.
- * Scrolls minimally — only moves if the item falls outside the viewport.
- */
-function adjustScrollFlat(index: number, scrollTop: number, viewportHeight: number): number {
-  if (index < scrollTop) return index;
-  if (index >= scrollTop + viewportHeight) return index - viewportHeight + 1;
-  return scrollTop;
 }
 
 /** Truncate a command to fit within maxLen, preserving the start. */

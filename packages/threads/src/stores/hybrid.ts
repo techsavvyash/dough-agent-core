@@ -45,6 +45,7 @@ export class HybridThreadStore implements ThreadStore {
         status           TEXT NOT NULL DEFAULT 'active',
         token_count      INTEGER NOT NULL DEFAULT 0,
         max_tokens       INTEGER NOT NULL DEFAULT 200000,
+        tokens_used      INTEGER NOT NULL DEFAULT 0,
         summary          TEXT,
         created_at       TEXT NOT NULL,
         updated_at       TEXT NOT NULL
@@ -72,6 +73,12 @@ export class HybridThreadStore implements ThreadStore {
     // Additive migration: add provider_session_id to existing DBs
     try {
       this.db.run(`ALTER TABLE sessions ADD COLUMN provider_session_id TEXT`);
+    } catch {
+      // Column already exists — safe to ignore
+    }
+    // Additive migration: add tokens_used to existing DBs
+    try {
+      this.db.run(`ALTER TABLE threads ADD COLUMN tokens_used INTEGER NOT NULL DEFAULT 0`);
     } catch {
       // Column already exists — safe to ignore
     }
@@ -138,6 +145,7 @@ export class HybridThreadStore implements ThreadStore {
       status: row.status as Thread["status"],
       tokenCount: row.token_count as number,
       maxTokens: row.max_tokens as number,
+      tokensUsed: (row.tokens_used as number) ?? 0,
       summary: (row.summary as string | null) ?? undefined,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
@@ -153,8 +161,8 @@ export class HybridThreadStore implements ThreadStore {
     this.db.run(
       `INSERT OR REPLACE INTO threads
          (id, session_id, parent_thread_id, origin, status, token_count,
-          max_tokens, summary, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          max_tokens, tokens_used, summary, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         thread.id,
         thread.sessionId,
@@ -163,6 +171,7 @@ export class HybridThreadStore implements ThreadStore {
         thread.status,
         thread.tokenCount,
         thread.maxTokens,
+        thread.tokensUsed,
         thread.summary ?? null,
         thread.createdAt,
         thread.updatedAt,

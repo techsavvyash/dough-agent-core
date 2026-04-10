@@ -70,6 +70,7 @@ export class JsonlThreadStore implements ThreadStore {
       status: meta.status as Thread["status"],
       tokenCount: meta.tokenCount as number,
       maxTokens: meta.maxTokens as number,
+      tokensUsed: (meta.tokensUsed as number) ?? 0,
       summary: (meta.summary as string | null) ?? undefined,
       messages,
       createdAt: meta.createdAt as string,

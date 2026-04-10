@@ -77,7 +77,7 @@ export function SessionBrowser({
             border={["right"]}
             borderStyle="single"
           >
-            <scrollbox flex={1} scrollTop={Math.max(0, selectedIndex - 3)}>
+            <scrollbox flex={1}>
               {sessions.map((s, i) => {
                 const isActive = s.id === activeSessionId;
                 const isSelected = i === selectedIndex;

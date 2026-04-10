@@ -64,6 +64,9 @@ export type ClientMessage =
   | { kind: "todos_list"; sessionId: string }
   | { kind: "todo_verify"; todoId: string; approved: boolean }
   // Runtime interactions (client → server)
+  // Model switching
+  | { kind: "switch_model"; model: string }
+  // Runtime interactions (client → server)
   | { kind: "runtime:get_contributions" }
   | { kind: "runtime:shortcut_triggered"; shortcutId: string }
   | { kind: "runtime:command"; commandId: string; args?: Record<string, unknown> };

@@ -94,6 +94,48 @@ export function createSessionCommandsExtension(): RuntimeExtension {
       });
 
       api.registerCommand({
+        id: "session.provider_switch",
+        name: "/provider",
+        description: "Switch LLM provider (claude or codex)",
+        category: "session",
+        execute() {
+          // Actual provider swap is handled in ws-handler's
+          // handleCommandSideEffects — this just signals intent.
+          api.notify("Switching provider...", "info");
+        },
+      });
+
+      api.registerCommand({
+        id: "session.provider_claude",
+        name: "Switch to Claude",
+        description: "Switch to Anthropic Claude provider",
+        category: "provider",
+        execute() {
+          api.notify("Switching to Claude...", "info");
+        },
+      });
+
+      api.registerCommand({
+        id: "session.provider_codex",
+        name: "Switch to Codex",
+        description: "Switch to OpenAI Codex provider",
+        category: "provider",
+        execute() {
+          api.notify("Switching to Codex...", "info");
+        },
+      });
+
+      api.registerCommand({
+        id: "session.model_switch",
+        name: "/model",
+        description: "Switch model (Ctrl+K)",
+        category: "session",
+        execute() {
+          api.openPanel("model.panel");
+        },
+      });
+
+      api.registerCommand({
         id: "session.exit",
         name: "/exit",
         description: "Exit Dough",
@@ -142,6 +184,19 @@ export function createSessionCommandsExtension(): RuntimeExtension {
         id: "bash.panel",
         name: "Bash Output",
         mode: "overlay",
+      });
+
+      api.registerPanel({
+        id: "model.panel",
+        name: "Model Selector",
+        mode: "inline",
+      });
+
+      api.registerShortcut({
+        id: "model.shortcut",
+        key: "ctrl+k",
+        description: "Open model selector",
+        commandId: "session.model_switch",
       });
     },
   };

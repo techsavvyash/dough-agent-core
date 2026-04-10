@@ -65,9 +65,20 @@ export function useSession(client: DoughClient) {
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last?.isStreaming && last.role === "assistant") {
+              // If there's existing content from a previous agentic loop turn
+              // (i.e. text → tool calls → more text), ensure a newline separator
+              // so the segments don't run together.
+              const hasCompletedTools = last.toolCalls?.some(
+                (tc) => tc.status === "success" || tc.status === "error"
+              );
+              const needsSeparator =
+                hasCompletedTools &&
+                last.content.length > 0 &&
+                !last.content.endsWith("\n");
+              const separator = needsSeparator ? "\n\n" : "";
               return [
                 ...prev.slice(0, -1),
-                { ...last, content: last.content + event.text },
+                { ...last, content: last.content + separator + event.text },
               ];
             }
             return [
@@ -246,6 +257,12 @@ export function useSession(client: DoughClient) {
 
     const unsubSession = client.onSession((s: SessionMeta) => {
       setSession(s);
+      // Hydrate token count from server-persisted thread data so it
+      // survives TUI restarts and thread switches.
+      const activeThread = s.threads.find((t) => t.id === s.activeThreadId);
+      if (activeThread) {
+        setTotalTokens(activeThread.tokensUsed);
+      }
     });
 
     const unsubError = client.onError((msg: string) => {

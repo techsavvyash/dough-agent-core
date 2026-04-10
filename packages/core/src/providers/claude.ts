@@ -174,6 +174,27 @@ export class ClaudeProvider implements LLMProvider {
           );
 
           for (const event of events) {
+            // Intercept stale-session errors from result messages before they
+            // reach the client. The SDK may return the error as a result (not
+            // a thrown exception), so the catch block alone won't cover it.
+            if (
+              event.type === DoughEventType.Error &&
+              !retried &&
+              typeof event.message === "string" &&
+              (event.message.includes("No conversation found") ||
+               event.message.includes("--resume requires a valid session ID"))
+            ) {
+              retried = true;
+              self.activeSessionId = null;
+              const freshOpts = { ...opts };
+              delete freshOpts.resume;
+              // Reset stream state for the retry
+              fullText = "";
+              gotStreamDeltas = false;
+              yield* runQuery(self, freshOpts);
+              return;
+            }
+
             if (event.type === DoughEventType.ContentDelta) {
               fullText += event.text;
               if (message.type === "stream_event") {
@@ -207,10 +228,14 @@ export class ClaudeProvider implements LLMProvider {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
 
-        // The SDK session JSONL may have been deleted (server restart, cleanup).
+        // The SDK session JSONL may have been deleted (server restart, cleanup)
+        // or the session ID format may be rejected by the SDK after an upgrade.
         // Retry once without `resume` so we start a fresh SDK session while
         // keeping Dough-level thread history intact.
-        if (!retried && msg.includes("No conversation found")) {
+        const isStaleSession =
+          msg.includes("No conversation found") ||
+          msg.includes("--resume requires a valid session ID");
+        if (!retried && isStaleSession) {
           retried = true;
           self.activeSessionId = null;
           const freshOpts = { ...opts };

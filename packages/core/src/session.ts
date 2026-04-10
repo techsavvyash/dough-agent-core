@@ -67,6 +67,21 @@ export class DoughSession {
     this.activeThreadId = threadId;
   }
 
+  /**
+   * Hot-swap the LLM provider. Thread history is preserved — only
+   * the provider used for subsequent turns changes.
+   */
+  setProvider(provider: LLMProvider): void {
+    this.provider = provider;
+  }
+
+  /**
+   * Change the model used for subsequent turns.
+   */
+  setModel(model: string): void {
+    this.model = model;
+  }
+
   async *send(prompt: string, attachments?: Attachment[]): AsyncGenerator<DoughEvent> {
     if (!this.activeThreadId) {
       await this.initialize();
@@ -134,8 +149,14 @@ export class DoughSession {
       isError?: boolean;
     }>();
 
+    // Filter out meta/system messages marked as UI-only so they never reach
+    // the LLM provider (e.g. "Switched to Claude", "Model changed to …").
+    const llmMessages = currentThread.messages.filter(
+      (m) => !m.metadata?.excludeFromLLM
+    );
+
     for await (const event of this.provider.send(
-      currentThread.messages,
+      llmMessages,
       options
     )) {
       // Check abort before yielding each event

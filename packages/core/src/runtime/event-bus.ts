@@ -91,7 +91,8 @@ export class EventBus {
     const snapshot = [...list];
     for (let i = 0; i < snapshot.length; i++) {
       try {
-        await snapshot[i](event);
+        const handler = snapshot[i];
+        if (handler) await handler(event);
       } catch (err) {
         this.errorHandler(event.type, err, i);
       }

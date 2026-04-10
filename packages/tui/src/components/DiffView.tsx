@@ -36,13 +36,12 @@ interface DiffViewProps {
  *   compile-time only; at runtime those fields are plain JS properties.
  */
 export function DiffView({ payload, onClose }: DiffViewProps) {
-  const { width, height } = useTerminalDimensions();
+  const { width } = useTerminalDimensions();
   const isNarrow = width < 80;
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("sidebar");
-  const [sidebarScrollTop, setSidebarScrollTop] = useState(0);
   const { diffs, stats } = payload;
   // On narrow screens, always hide sidebar and focus diff
   const effectiveSidebarVisible = sidebarVisible && !isNarrow;
@@ -50,10 +49,6 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
   // Ref to the native <diff> renderable — used for imperative scrolling.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const diffRef = useRef<any>(null);
-
-  // Header rule+stat+rule = 3, footer rule = 1, sidebar bottom stats row = 1
-  const SIDEBAR_CHROME = 5;
-  const sidebarViewport = Math.max(1, height - SIDEBAR_CHROME);
 
   // Singletons — stable across re-renders
   const syntaxStyle = useMemo(() => getDoughSyntaxStyle(), []);
@@ -107,14 +102,12 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
         resetDiffScroll();
         setSelectedFileIndex((i: number) => {
           const next = i > 0 ? i - 1 : diffs.length - 1;
-          setSidebarScrollTop((st) => adjustScrollFlat(next, st, sidebarViewport));
           return next;
         });
       } else if (key.name === "down" || key.name === "j") {
         resetDiffScroll();
         setSelectedFileIndex((i: number) => {
           const next = i < diffs.length - 1 ? i + 1 : 0;
-          setSidebarScrollTop((st) => adjustScrollFlat(next, st, sidebarViewport));
           return next;
         });
       } else if (key.name === "s") {
@@ -177,8 +170,8 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
 
         {/* File list panel — collapsible with `b` */}
         {effectiveSidebarVisible && (
-          <box width={FILE_LIST_W} flexDirection="column" border={["right"]} borderFg={focusedPanel === "sidebar" ? colors.accent : colors.border}>
-            <scrollbox flex={1} scrollTop={sidebarScrollTop}>
+          <box width={FILE_LIST_W} flexDirection="column" border={["right"]}>
+            <scrollbox flex={1}>
               {diffs.map((diff, i) => {
                 const isSel = i === selectedFileIndex;
                 return (
@@ -203,7 +196,7 @@ export function DiffView({ payload, onClose }: DiffViewProps) {
         {/* Diff panel — native <diff> with tree-sitter syntax highlighting.
             Scroll is controlled imperatively via diffRef (see scrollDiff / resetDiffScroll).
             The <diff> element is virtualised and has no scrollTop prop. */}
-        <box flex={1} flexDirection="column" borderFg={focusedPanel === "diff" ? colors.accent : colors.border}>
+        <box flex={1} flexDirection="column">
           {/* File path + language tag */}
           <box height={1} paddingX={1} flexDirection="row">
             <text fg={getStatusColor(sel.status)}>{getStatusIcon(sel.status) + "  "}</text>
@@ -266,16 +259,6 @@ function getStatusColor(status: FileDiff["status"]): string {
     case "modified": return colors.accent;
     case "deleted":  return colors.error;
   }
-}
-
-/**
- * Return a scrollTop that keeps a flat list item (all items height=1) visible.
- * Scrolls minimally — only moves if the item falls outside the viewport.
- */
-function adjustScrollFlat(index: number, scrollTop: number, viewportHeight: number): number {
-  if (index < scrollTop) return index;
-  if (index >= scrollTop + viewportHeight) return index - viewportHeight + 1;
-  return scrollTop;
 }
 
 /** Shorten a path to fit within maxLen chars, removing leading segments. */

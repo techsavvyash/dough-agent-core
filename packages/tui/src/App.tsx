@@ -18,6 +18,7 @@ import { StatusBar, type ApprovalMode } from "./components/StatusBar.tsx";
 import { HistorySearch } from "./components/HistorySearch.tsx";
 import { CopyMode } from "./components/CopyMode.tsx";
 import { SessionBrowser } from "./components/SessionBrowser.tsx";
+import { ModelSelector } from "./components/ModelSelector.tsx";
 import { useGitBranch } from "./hooks/useGitBranch.ts";
 import { useSessions } from "./hooks/useSessions.ts";
 import { colors } from "./theme.ts";
@@ -66,13 +67,14 @@ export function App({ serverUrl, provider, model }: AppProps) {
   const [showHistorySearch, setShowHistorySearch] = useState(false);
   const [showCopyMode, setShowCopyMode] = useState(false);
   const [showSessionBrowser, setShowSessionBrowser] = useState(false);
+  const [showModelSelector, setShowModelSelector] = useState(false);
   const [composerFillText, setComposerFillText] = useState<string | null>(null);
   /** Flat list of every bash tool call across all messages — used by BashOutputView. */
   const bashCalls = useMemo<BashCallEntry[]>(() => {
     const acc: BashCallEntry[] = [];
     for (const msg of messages) {
       for (const tc of msg.toolCalls ?? []) {
-        if (tc.name === "Bash" || tc.name === "bash" || tc.name === "execute") {
+        if (tc.name === "Bash" || tc.name === "bash" || tc.name === "execute" || tc.name === "command_execution") {
           acc.push({
             callId: tc.callId,
             command: String(tc.args.command ?? ""),
@@ -86,7 +88,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
   }, [messages]);
 
   const noOverlay = !showPalette && !showDiffView && !showThreadViewer && !showBashOutput
-    && !showCopyMode && !showSessionBrowser;
+    && !showCopyMode && !showSessionBrowser && !showModelSelector;
 
   // Load saved theme preference on mount
   useEffect(() => {
@@ -180,6 +182,9 @@ export function App({ serverUrl, provider, model }: AppProps) {
         case "bash.panel":
           if (bashCalls.length > 0) setShowBashOutput(true);
           break;
+        case "model.panel":
+          setShowModelSelector(true);
+          break;
       }
     });
   }, [client, requestDiffs, requestAllThreads, bashCalls.length]);
@@ -256,7 +261,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
   );
 
   const executeCommand = useCallback(
-    (commandId: string) => {
+    (commandId: string, args?: Record<string, unknown>) => {
       setShowPalette(false);
 
       // Exit is inherently local — must terminate the TUI process
@@ -269,7 +274,7 @@ export function App({ serverUrl, provider, model }: AppProps) {
       // command handler, performs any side-effects (fork, new session, compact),
       // and sends back UI intents (runtime:notify, runtime:open_panel) that
       // the onNotify/onOpenPanel listeners handle.
-      client.executeRuntimeCommand(commandId);
+      client.executeRuntimeCommand(commandId, args);
     },
     [client]
   );
@@ -286,14 +291,35 @@ export function App({ serverUrl, provider, model }: AppProps) {
       if (text.startsWith("/") && !attachments?.length) {
         const rawCmd = text.slice(1).trim().toLowerCase();
         const cmds = commandsRef.current;
-        // Find matching runtime command by name or id suffix
-        const matched = cmds.find(
+
+        // Try exact match first
+        let matched = cmds.find(
           (c) =>
             c.name.replace(/^\//, "").toLowerCase() === rawCmd ||
             c.id.split(".").pop() === rawCmd
         );
+
+        // Try prefix match for commands with arguments (e.g. "/provider claude")
+        let cmdArgs: Record<string, unknown> | undefined;
+        if (!matched) {
+          const parts = rawCmd.split(/\s+/);
+          const cmdName = parts[0]!;
+          const argStr = parts.slice(1).join(" ");
+          matched = cmds.find(
+            (c) =>
+              c.name.replace(/^\//, "").toLowerCase() === cmdName ||
+              c.id.split(".").pop() === cmdName
+          );
+          if (matched && argStr) {
+            // For /provider, pass the provider name as { provider: "claude" }
+            if (matched.id === "session.provider_switch") {
+              cmdArgs = { provider: argStr };
+            }
+          }
+        }
+
         if (matched) {
-          executeCommand(matched.id);
+          executeCommand(matched.id, cmdArgs);
         } else {
           addSystemMessage(`Unknown command: ${rawCmd}`);
         }
@@ -321,6 +347,15 @@ export function App({ serverUrl, provider, model }: AppProps) {
       addSystemMessage(`Switching to thread ${thread.id.slice(0, 8)}…`);
     },
     [client, clearMessages, addSystemMessage]
+  );
+
+  const handleModelSelect = useCallback(
+    (modelId: string) => {
+      setShowModelSelector(false);
+      client.switchModel(modelId);
+      addSystemMessage(`Switching model to ${modelId}...`);
+    },
+    [client, addSystemMessage],
   );
 
   // Full-screen copy mode overlay
@@ -431,6 +466,16 @@ export function App({ serverUrl, provider, model }: AppProps) {
         />
       )}
 
+      {/* ── Model selector ───────────────────────── inline above composer */}
+      {showModelSelector && (
+        <ModelSelector
+          provider={session?.provider ?? provider}
+          currentModel={session?.model ?? ""}
+          onSelect={handleModelSelect}
+          onClose={() => setShowModelSelector(false)}
+        />
+      )}
+
       {/* ── History search ─────────────────────── inline above composer */}
       {showHistorySearch && (
         <HistorySearch
@@ -450,11 +495,12 @@ export function App({ serverUrl, provider, model }: AppProps) {
         queuedCount={queuedCount}
         onAbort={abort}
         onOpenPalette={() => setShowPalette(true)}
-        paletteOpen={showPalette || showHistorySearch}
+        paletteOpen={showPalette || showHistorySearch || showModelSelector}
         stats={stats}
         hasChanges={hasChanges}
         fillText={composerFillText}
         onFillConsumed={() => setComposerFillText(null)}
+        messages={messages}
       />
     </box>
   );

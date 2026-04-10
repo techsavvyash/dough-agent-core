@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useKeyboard } from "@opentui/react";
 import { colors, symbols } from "../theme.ts";
 
@@ -18,22 +18,6 @@ interface ThinkingBlockProps {
  */
 export function ThinkingBlock({ thought, isStreaming = false }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(false);
-  const [frame, setFrame] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
-
-  // Spinner + elapsed counter — only runs while streaming
-  useEffect(() => {
-    if (!isStreaming) return;
-    const spinInterval = setInterval(
-      () => setFrame((f) => (f + 1) % symbols.spinnerFrames.length),
-      80,
-    );
-    const tickInterval = setInterval(() => setElapsed((s) => s + 1), 1000);
-    return () => {
-      clearInterval(spinInterval);
-      clearInterval(tickInterval);
-    };
-  }, [isStreaming]);
 
   // Space toggles expand/collapse when done streaming
   useKeyboard((key) => {
@@ -43,20 +27,11 @@ export function ThinkingBlock({ thought, isStreaming = false }: ThinkingBlockPro
   });
 
   // ── STREAMING MODE ──────────────────────────────────────────────────────────
+  // Don't render the animated pill during streaming — the Composer border
+  // already shows "● Thinking... [8s]" and LiveActivityBar covers tool phases.
+  // This avoids three redundant thinking indicators stacking up.
   if (isStreaming) {
-    const spinner = symbols.spinnerFrames[frame] ?? symbols.spinnerFrames[0]!;
-    const elapsedStr = elapsed > 0 ? `  ${String(elapsed)}s` : "";
-    return (
-      <box paddingX={1} height={1} flexDirection="row" marginBottom={1}>
-        <box width={2} flexShrink={0}>
-          <text fg={colors.primary}>{symbols.thought}</text>
-        </box>
-        <box width={2} flexShrink={0}>
-          <text fg={colors.secondary}>{spinner}</text>
-        </box>
-        <text fg={colors.secondary}>{`Thinking...${elapsedStr}`}</text>
-      </box>
-    );
+    return null;
   }
 
   // ── DONE — EXPANDED ─────────────────────────────────────────────────────────

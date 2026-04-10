@@ -23,6 +23,7 @@ export class SqliteThreadStore implements ThreadStore {
         status TEXT NOT NULL DEFAULT 'active',
         token_count INTEGER NOT NULL DEFAULT 0,
         max_tokens INTEGER NOT NULL DEFAULT 200000,
+        tokens_used INTEGER NOT NULL DEFAULT 0,
         summary TEXT,
         messages TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
@@ -35,6 +36,12 @@ export class SqliteThreadStore implements ThreadStore {
     // Add origin column to existing databases that predate this migration
     try {
       this.db.run(`ALTER TABLE threads ADD COLUMN origin TEXT NOT NULL DEFAULT 'root'`);
+    } catch {
+      // Column already exists — safe to ignore
+    }
+    // Add tokens_used column to existing databases
+    try {
+      this.db.run(`ALTER TABLE threads ADD COLUMN tokens_used INTEGER NOT NULL DEFAULT 0`);
     } catch {
       // Column already exists — safe to ignore
     }
@@ -62,8 +69,8 @@ export class SqliteThreadStore implements ThreadStore {
     this.db.run(
       `INSERT OR REPLACE INTO threads
          (id, session_id, parent_thread_id, origin, status, token_count,
-          max_tokens, summary, messages, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          max_tokens, tokens_used, summary, messages, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         thread.id,
         thread.sessionId,
@@ -72,6 +79,7 @@ export class SqliteThreadStore implements ThreadStore {
         thread.status,
         thread.tokenCount,
         thread.maxTokens,
+        thread.tokensUsed,
         thread.summary ?? null,
         JSON.stringify(thread.messages),
         thread.createdAt,
@@ -107,6 +115,7 @@ export class SqliteThreadStore implements ThreadStore {
       status: row.status as Thread["status"],
       tokenCount: row.token_count as number,
       maxTokens: row.max_tokens as number,
+      tokensUsed: (row.tokens_used as number) ?? 0,
       summary: (row.summary as string | null) ?? undefined,
       messages: JSON.parse(row.messages as string) as ThreadMessage[],
       createdAt: row.created_at as string,
