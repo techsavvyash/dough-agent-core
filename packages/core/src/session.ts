@@ -149,8 +149,14 @@ export class DoughSession {
       isError?: boolean;
     }>();
 
+    // Filter out meta/system messages marked as UI-only so they never reach
+    // the LLM provider (e.g. "Switched to Claude", "Model changed to …").
+    const llmMessages = currentThread.messages.filter(
+      (m) => !m.metadata?.excludeFromLLM
+    );
+
     for await (const event of this.provider.send(
-      currentThread.messages,
+      llmMessages,
       options
     )) {
       // Check abort before yielding each event

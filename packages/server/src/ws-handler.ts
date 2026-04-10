@@ -211,6 +211,19 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           ws.send(JSON.stringify(reply));
         }
 
+        // Persist a meta message in the thread so it survives TUI restarts
+        if (session?.currentThreadId) {
+          const tm = agent.getThreadManager();
+          await tm.addMetaMessage(session.currentThreadId, {
+            id: crypto.randomUUID(),
+            role: "system",
+            content: `Provider switched: ${currentProvider} → ${target}${newModelId ? ` (model: ${newModelId})` : ""}`,
+            tokenEstimate: 0,
+            timestamp: new Date().toISOString(),
+            metadata: { systemType: "provider_switch", excludeFromLLM: true },
+          });
+        }
+
         console.log(`[ws] provider switched: ${currentProvider} → ${target}`);
         break;
       }
@@ -220,6 +233,17 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
         if (!session?.currentThreadId) return;
         const tm = agent.getThreadManager();
         const result = await tm.fork(session.currentThreadId);
+
+        // Persist a meta message in the original thread
+        await tm.addMessage(result.originalThread.id, {
+          id: crypto.randomUUID(),
+          role: "system",
+          content: `Thread forked → ${result.forkedThread.id.slice(0, 8)}`,
+          tokenEstimate: 0,
+          timestamp: new Date().toISOString(),
+          metadata: { systemType: "thread_fork", excludeFromLLM: true },
+        });
+
         const reply: ServerMessage = {
           kind: "event",
           event: {
@@ -316,6 +340,19 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
         // Capture total tokens from Finished events for persistence
         if (event.type === DoughEventType.Finished && event.usage) {
           turnTokensUsed += event.usage.totalTokens;
+        }
+
+        // Persist meta message when a thread handoff occurs
+        if (event.type === DoughEventType.ThreadHandoff) {
+          const tm = agent.getThreadManager();
+          await tm.addMetaMessage(event.fromThreadId, {
+            id: crypto.randomUUID(),
+            role: "system",
+            content: `Thread handed off → ${event.toThreadId.slice(0, 8)}`,
+            tokenEstimate: 0,
+            timestamp: new Date().toISOString(),
+            metadata: { systemType: "thread_handoff", excludeFromLLM: true },
+          });
         }
 
         // Platform events (attribution, diff tracking) are handled by
@@ -741,6 +778,17 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
           if (!session) return;
           const tm = agent.getThreadManager();
           const result = await tm.fork(msg.threadId, msg.forkPoint);
+
+          // Persist a meta message in the original thread
+          await tm.addMetaMessage(result.originalThread.id, {
+            id: crypto.randomUUID(),
+            role: "system",
+            content: `Thread forked → ${result.forkedThread.id.slice(0, 8)}`,
+            tokenEstimate: 0,
+            timestamp: new Date().toISOString(),
+            metadata: { systemType: "thread_fork", excludeFromLLM: true },
+          });
+
           const reply: ServerMessage = {
             kind: "event",
             event: {
@@ -959,6 +1007,19 @@ export function createWSHandler(agent: DoughAgent, store?: ThreadStore, diffStor
                 updatedAt: new Date().toISOString(),
               });
             }
+          }
+
+          // Persist a meta message in the thread so it survives TUI restarts
+          if (session?.currentThreadId) {
+            const tm = agent.getThreadManager();
+            await tm.addMetaMessage(session.currentThreadId, {
+              id: crypto.randomUUID(),
+              role: "system",
+              content: `Model switched to ${targetModel}`,
+              tokenEstimate: 0,
+              timestamp: new Date().toISOString(),
+              metadata: { systemType: "model_switch", excludeFromLLM: true },
+            });
           }
 
           console.log(`[ws] model switched to ${targetModel} (provider: ${currentProvider})`);

@@ -88,6 +88,19 @@ export class ThreadManager {
   }
 
   /**
+   * Append a UI-only meta message to a thread regardless of its status.
+   * These messages have tokenEstimate: 0, are excluded from LLM context
+   * (via metadata.excludeFromLLM), and skip the token-count / warning logic.
+   */
+  async addMetaMessage(threadId: string, message: ThreadMessage): Promise<void> {
+    const thread = await this.config.store.load(threadId);
+    if (!thread) return; // silently skip if thread was deleted
+    thread.messages.push(message);
+    thread.updatedAt = new Date().toISOString();
+    await this.config.store.save(thread);
+  }
+
+  /**
    * Check if a thread needs handoff (approaching or exceeding token cap).
    */
   needsHandoff(thread: Thread): boolean {
